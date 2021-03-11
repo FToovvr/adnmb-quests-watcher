@@ -112,8 +112,10 @@ def fetch_board(db: DB, fetching_since: datetime, total_bandwidth_usage: TotalBa
             logger.debug(f'串 #{i} 是之前曾未抓取过的串，'
                          + f'将会通过规定的下界时间作为范围的下界')
 
-        if not is_target(thread.replies[0]):
+        if thread.total_reply_count <= 5 \
+                or not is_target(thread.replies[0]):
             # 要抓取的内容全在预览里，不用再进串里去翻了
+            # TODO 判断是否没有剩余回应（len(thread.total_reply_count) <= 5）应该在 API 那边进行，用
             targets = list(
                 [post for post in thread.replies if is_target(post)])
             db.record_thread_replies(
