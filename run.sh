@@ -2,6 +2,8 @@
 
 set -e
 
+./0_prepare.py
+
 #source ./venv/bin/activate
 source ./export-env.sh
 source ./export-secrets.sh

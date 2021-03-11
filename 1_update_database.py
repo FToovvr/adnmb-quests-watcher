@@ -39,18 +39,18 @@ client = anobbsclient.Client(
 def main():
     db = DB(conn=sqlite3.connect('db.sqlite3'))
 
-    total_bandwidth_usage = TotalBandwidthUsage()
+    stats = Stats()
 
     fetching_since = db.should_fetch_since
 
     exception = None
     try:
         fetch_board(db, fetching_since=fetching_since,
-                    total_bandwidth_usage=total_bandwidth_usage)
+                    stats=stats)
     except Exception as e:
         exception = e
 
-    db.report_end(exception, total_bandwidth_usage)
+    db.report_end(exception, stats)
 
     db.close()
 
@@ -58,7 +58,7 @@ def main():
         raise exception
 
 
-def fetch_board(db: DB, fetching_since: datetime, total_bandwidth_usage: TotalBandwidthUsage):
+def fetch_board(db: DB, fetching_since: datetime, stats: Stats):
 
     logger = logging.getLogger('FETCH')
 
@@ -76,8 +76,9 @@ def fetch_board(db: DB, fetching_since: datetime, total_bandwidth_usage: TotalBa
     for (pn, page, usage) in walker:
         logger.info(f'获取到版块第 {pn} 页。纳入串数 = {len(page)}')
         bandwidth_usage_for_board.add(usage)
+        stats.board_request_count += 1
         threads_on_board += page
-    total_bandwidth_usage.add(bandwidth_usage_for_board.total)
+    stats.total_bandwidth_usage.add(bandwidth_usage_for_board.total)
     logger.info(f'完成获取版块。总共纳入串数 = {len(threads_on_board)}，'
                 + f'期间 (上传字节数, 下载字节数) = {bandwidth_usage_for_board.total}')
 
@@ -89,7 +90,10 @@ def fetch_board(db: DB, fetching_since: datetime, total_bandwidth_usage: TotalBa
             is_first_found_thread = False
             db.report_ensured_fetched_until(thread.last_modified_time)
 
-        # 记录串
+        is_thread_recorded = db.is_thread_recorded(thread.id)
+        if not is_thread_recorded:
+            stats.new_thread_count += 1
+        # 记录或更新串
         # current_reply_count 在后面一同记录
         db.record_thread(thread)
 
@@ -118,6 +122,10 @@ def fetch_board(db: DB, fetching_since: datetime, total_bandwidth_usage: TotalBa
             # TODO 判断是否没有剩余回应（len(thread.total_reply_count) <= 5）应该在 API 那边进行，用
             targets = list(
                 [post for post in thread.replies if is_target(post)])
+            if len(targets) > 0:
+                if is_thread_recorded:
+                    stats.affected_thread_count += 1
+                stats.new_post_count += len(targets)
             db.record_thread_replies(
                 thread=thread, replies=targets, total_reply_count=thread.total_reply_count)
             logger.debug(f'串 #{i} 由于全部需要抓取的回应已在预览之中，记录后到此结束。')
@@ -152,7 +160,8 @@ def fetch_board(db: DB, fetching_since: datetime, total_bandwidth_usage: TotalBa
                 # TODO: 这一块应该放在 API 那边
                 (gatekeeper_page, usage) = client.get_thread_page(
                     id=thread.id, page=client.get_thread_gatekeeper_page_number())
-                total_bandwidth_usage.add(usage)
+                stats.total_bandwidth_usage.add(usage)
+                stats.thread_request_count += 1
                 gatekeeper_post_id = gatekeeper_page.replies[-1].id
                 logger.debug(f'串 #{i} 确认守门串号。守门串号 = {gatekeeper_post_id}')
             else:
@@ -186,6 +195,9 @@ def fetch_board(db: DB, fetching_since: datetime, total_bandwidth_usage: TotalBa
             thread_walk_page_count = 0
             for (pn, page, usage) in walker:
                 thread_walk_page_count += 1
+                stats.thread_request_count += 1
+                if client.thread_page_requires_login(pn):
+                    stats.logged_in_thread_request_count += 1
                 logger.debug(f'串 #{i} 页 {pn}。纳入回应数 = {len(page.replies)}')
                 page: anobbsclient.ThreadPage = page
                 bandwidth_usage_for_thread.add(usage)
@@ -194,7 +206,11 @@ def fetch_board(db: DB, fetching_since: datetime, total_bandwidth_usage: TotalBa
                 targets += page.replies
             db.record_thread_replies(
                 thread=thread, replies=targets, total_reply_count=final_reply_count)
-            total_bandwidth_usage.add(bandwidth_usage_for_thread.total)
+            stats.total_bandwidth_usage.add(bandwidth_usage_for_thread.total)
+            if len(targets) > 0:
+                if is_thread_recorded:
+                    stats.affected_thread_count += 1
+                stats.new_post_count += len(targets)
             logger.debug(f'串 #{i} 已抓取到范围内所有新回应，记录后到此结束。'
                          + f'遍历访问页数 = {thread_walk_page_count}，'
                          + f'期间 (上传字节数, 下载字节数) = {bandwidth_usage_for_thread.total}')
@@ -210,6 +226,23 @@ class TotalBandwidthUsage:
     @property
     def total(self) -> anobbsclient.BandwidthUsage:
         return tuple(map(sum, zip(*self.usages)))
+
+
+@dataclass
+class Stats:
+
+    # TODO: 这些是不是该在 DB 那边统计？
+    new_thread_count = 0
+    affected_thread_count = 0
+    new_post_count = 0
+
+    # TODO: 这些是不是该在 API 那边统计？
+    board_request_count = 0
+    thread_request_count = 0
+    logged_in_thread_request_count = 0
+
+    total_bandwidth_usage: TotalBandwidthUsage = field(
+        default_factory=TotalBandwidthUsage)
 
 
 @dataclass(frozen=True)
@@ -244,9 +277,9 @@ class DB:
         self.logger.info(f'已开始新活动。活动 id = {activity_id}')
 
     def close(self):
-        logging.info('正在关闭 DB')
+        self.logger.info('正在关闭 DB')
         self.conn.close()
-        logging.info('已关闭 DB')
+        self.logger.info('已关闭 DB')
 
     @property
     def never_runs(self) -> bool:
@@ -282,7 +315,7 @@ class DB:
         """
         if self.never_runs:
             # 若第一次运行，以5分钟前作为抓取的时间下界
-            return datetime.now().replace(tzinfo=local_tz) - timedelta(minutes=240)
+            return datetime.now().replace(tzinfo=local_tz) - timedelta(minutes=5)
 
         last_activity_fetched_until = self.conn.execute('''
             SELECT ensured_fetched_until FROM activity 
@@ -416,7 +449,7 @@ class DB:
             return None
         return json.dumps(post_raw)
 
-    def report_end(self, exception: Exception, total_usage: TotalBandwidthUsage):
+    def report_end(self, exception: Exception, stats: Stats):
         if exception is not None:
             is_successful = False
             try:
@@ -426,19 +459,28 @@ class DB:
         else:
             is_successful = True
             message = None
-        total_usage = total_usage.total
+        total_usage = stats.total_bandwidth_usage.total
 
         self.logger.info(
             f'正在汇报本次活动结果。活动 ID = {self.activity_id}，成功 = {is_successful}，'
-            + f'上传字节数 = {total_usage[0]}，下载字节数 = {total_usage[1]}')
+            + f'上传字节数 = {total_usage[0]}，下载字节数 = {total_usage[1]}，'
+            + f'新记录串数 = {stats.new_thread_count}，有新增回应串数 = {stats.affected_thread_count}，'
+            + f'新记录回应数 = {stats.new_post_count}，'
+            + f'请求版块页面次数 = {stats.board_request_count}，请求串页面次数 = {stats.thread_request_count}')
 
         self.conn.execute('''
             UPDATE activity
             SET is_successful = ?, message = ?,
-                uploaded_bytes = ?, downloaded_bytes = ?
+                uploaded_bytes = ?, downloaded_bytes = ?,
+                newly_recorded_thread_count = ?, affected_thread_count = ?,
+                newly_recorded_post_count = ?,
+                requested_board_page_count = ?, requested_thread_page_count = ?
             WHERE id = ?
         ''', (is_successful, message,
               total_usage[0], total_usage[1],
+              stats.new_thread_count, stats.affected_thread_count,
+              stats.new_post_count,
+              stats.board_request_count, stats.thread_request_count,
               self.activity_id))
         self.conn.commit()
 

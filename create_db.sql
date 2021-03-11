@@ -16,8 +16,21 @@ CREATE TABLE activity (
     is_successful           BOOLEAN     NOT NULL,
     message                 TEXT,
 
-    uploaded_bytes          INTEGER,
-    downloaded_bytes        INTEGER,
+    -- 本次活动的统计信息：
+    -- 上传了多少字节
+    uploaded_bytes              INTEGER,
+    -- 下载了多少字节
+    downloaded_bytes            INTEGER,
+    -- 新记录了多少主题串
+    newly_recorded_thread_count INTEGER,
+    -- 在已有的主题串中，有多少记录了新的回应
+    affected_thread_count       INTEGER,
+    -- 新记录了多少回应
+    newly_recorded_post_count   INTEGER,
+    -- 调用了多少次获取版块页面的 API
+    requested_board_page_count  INTEGER,
+    -- 调用了多少次获取串页面的 API
+    requested_thread_page_count INTEGER,
 
     PRIMARY KEY (id)
 );
