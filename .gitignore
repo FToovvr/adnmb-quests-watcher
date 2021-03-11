@@ -1,0 +1,6 @@
+/venv
+
+/export-*.sh
+/db.sqlite3
+/report_out
+/logs
