@@ -470,7 +470,8 @@ class DB:
             + f'上传字节数 = {total_usage[0]}，下载字节数 = {total_usage[1]}，'
             + f'新记录串数 = {stats.new_thread_count}，有新增回应串数 = {stats.affected_thread_count}，'
             + f'新记录回应数 = {stats.new_post_count}，'
-            + f'请求版块页面次数 = {stats.board_request_count}，请求串页面次数 = {stats.thread_request_count}')
+            + f'请求版块页面次数 = {stats.board_request_count}，请求串页面次数 = {stats.thread_request_count}，'
+            + f'以登录状态请求串页面次数 = {stats.logged_in_thread_request_count}')
 
         self.conn.execute('''
             UPDATE activity
@@ -478,13 +479,15 @@ class DB:
                 uploaded_bytes = ?, downloaded_bytes = ?,
                 newly_recorded_thread_count = ?, affected_thread_count = ?,
                 newly_recorded_post_count = ?,
-                requested_board_page_count = ?, requested_thread_page_count = ?
+                requested_board_page_count = ?, requested_thread_page_count = ?,
+                logged_in_thread_request_count = ?
             WHERE id = ?
         ''', (is_successful, message,
               total_usage[0], total_usage[1],
               stats.new_thread_count, stats.affected_thread_count,
               stats.new_post_count,
               stats.board_request_count, stats.thread_request_count,
+              stats.logged_in_thread_request_count,
               self.activity_id))
         self.conn.commit()
 

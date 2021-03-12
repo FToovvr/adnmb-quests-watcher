@@ -18,19 +18,21 @@ CREATE TABLE activity (
 
     -- 本次活动的统计信息：
     -- 上传了多少字节
-    uploaded_bytes              INTEGER,
+    uploaded_bytes                  INTEGER,
     -- 下载了多少字节
-    downloaded_bytes            INTEGER,
+    downloaded_bytes                INTEGER,
     -- 新记录了多少主题串
-    newly_recorded_thread_count INTEGER,
+    newly_recorded_thread_count     INTEGER,
     -- 在已有的主题串中，有多少记录了新的回应
-    affected_thread_count       INTEGER,
+    affected_thread_count           INTEGER,
     -- 新记录了多少回应
-    newly_recorded_post_count   INTEGER,
+    newly_recorded_post_count       INTEGER,
     -- 调用了多少次获取版块页面的 API
-    requested_board_page_count  INTEGER,
+    requested_board_page_count      INTEGER,
     -- 调用了多少次获取串页面的 API
-    requested_thread_page_count INTEGER,
+    requested_thread_page_count     INTEGER,
+    -- 有多少次以登录状态调用了获取串页面的 API
+    logged_in_thread_request_count  INTEGER,
 
     PRIMARY KEY (id)
 );
