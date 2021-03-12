@@ -13,5 +13,7 @@ os.makedirs(today.strftime(LOG_FILE_PATH_FORMAT), exist_ok=True)
 
 yesterday_log_folder = yesterday.strftime(LOG_FILE_PATH_FORMAT)
 if os.path.isdir(yesterday_log_folder):
-    subprocess.run(
+    result = subprocess.run(
         ['tar', 'czf', f'{yesterday_log_folder}.tgz', yesterday_log_folder])
+    if result.returncode == 0:
+        subprocess.run(['command', 'rm', '-rf', yesterday_log_folder])
