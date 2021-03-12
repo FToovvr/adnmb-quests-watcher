@@ -119,7 +119,7 @@ def fetch_board(db: DB, fetching_since: datetime, stats: Stats):
         if thread.total_reply_count <= 5 \
                 or not is_target(thread.replies[0]):
             # 要抓取的内容全在预览里，不用再进串里去翻了
-            # TODO 判断是否没有剩余回应（len(thread.total_reply_count) <= 5）应该在 API 那边进行，用
+            # TODO 判断是否没有剩余回应（len(thread.total_reply_count) <= 5）应该在 API 那边进行
             targets = list(
                 [post for post in thread.replies if is_target(post)])
             if len(targets) > 0:
@@ -131,9 +131,13 @@ def fetch_board(db: DB, fetching_since: datetime, stats: Stats):
             logger.debug(f'串 #{i} 由于全部需要抓取的回应已在预览之中，记录后到此结束。')
         else:
             # 反向遍历
-            current_page_count = (thread.total_reply_count - 1) // 19 + 1
+            start_page_number = (thread.total_reply_count - 1) // 19 + 1
             logger.debug(f'串 #{i} 需要进入以抓取目标范围内的回应。' +
-                         f'从回应总数推测出的当前页数 = {current_page_count}')
+                         f'从回应总数推测出的当前页数 = {start_page_number}')
+            if (thread.total_reply_count % 19) <= 5:
+                # 最新一页的内容已经全部包含在预览中了，因此略过
+                logger.debug(f'串 #{i} 由于最新一页的回应已全部包含在预览中，抓取时会略过该页')
+                start_page_number -= 1
 
             needs_gatekeeper_post_id = False
             if has_old_records:
@@ -145,12 +149,12 @@ def fetch_board(db: DB, fetching_since: datetime, stats: Stats):
                     last_page_count = None
                     logger.warning(f'串 #{i} 存在曾抓取到的回应，但却没有记录回应总数')
                 if (last_page_count is None or not client.thread_page_requires_login(last_page_count)) \
-                        and client.thread_page_requires_login(current_page_count):
+                        and client.thread_page_requires_login(start_page_number):
                     needs_gatekeeper_post_id = True
                     logger.debug(f'串 #{i} 由于要抓取的内容需要登录，'
                                  + f'而之前抓取到的内容在需要登录之前，无法用以判断是否卡页，'
                                  + f'因而需要额外获取第 100 页来确认守门串号')
-            elif client.thread_page_requires_login(current_page_count):
+            elif client.thread_page_requires_login(start_page_number):
                 needs_gatekeeper_post_id = True
                 logger.debug(f'串 #{i} 由于要抓取的内容需要登录，'
                              + f'而之前曾未抓取过内容，无法用以判断是否卡页，'
@@ -171,7 +175,7 @@ def fetch_board(db: DB, fetching_since: datetime, stats: Stats):
                 walker = create_walker(
                     target=ReversalThreadWalkTarget(
                         thread_id=thread.id,
-                        start_page_number=current_page_count,
+                        start_page_number=start_page_number,
                         gatekeeper_post_id=gatekeeper_post_id,
                         stop_before_post_id=latest_seen_reply_id,
                         expected_stop_page_number=last_page_count,
@@ -182,7 +186,7 @@ def fetch_board(db: DB, fetching_since: datetime, stats: Stats):
                 walker = create_walker(
                     target=ReversalThreadWalkTarget(
                         thread_id=thread.id,
-                        start_page_number=current_page_count,
+                        start_page_number=start_page_number,
                         gatekeeper_post_id=gatekeeper_post_id,
                         stop_before_datetime=fetching_since,
                     ),
