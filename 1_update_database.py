@@ -19,7 +19,7 @@ from anobbsclient.walk import create_walker, BoardWalkTarget, ReversalThreadWalk
 
 # 默认单线程
 
-logging.config.fileConfig('logging.conf')
+logging.config.fileConfig('logging.1_update_database.conf')
 
 BOARD_ID = 111  # 跑团版
 local_tz = tz.gettz('Asia/Shanghai')
