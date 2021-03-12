@@ -10,6 +10,8 @@ local_tz = tz.gettz('Asia/Shanghai')
 
 LOG_FILE_PATH_FORMAT = 'logs/%Y-%m-%d'
 
+# TODO: 每5分钟抓取，每1小时生成24小时报告，每1天生成归档报告
+
 
 def main():
     today = datetime.now(tz=local_tz)
@@ -24,7 +26,10 @@ def main():
         result = subprocess.run(
             ['tar', 'czf', f'{yesterday_log_folder}.tgz', yesterday_log_folder])
         if result.returncode == 0:
-            subprocess.run(['command', 'rm', '-rf', yesterday_log_folder])
+            subprocess.run(['/bin/rm', '-rf', yesterday_log_folder])
+
+    result = subprocess.run('./1_update_database.py')
+    assert(result.returncode == 0)
 
 
 if __name__ == '__main__':
