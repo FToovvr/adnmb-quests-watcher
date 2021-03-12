@@ -30,7 +30,11 @@ def main():
     db.close()
 
     trend_report_text = generate_trend_report_text(yesterday, threads, stats)
-    print(trend_report_text)
+    new_thread_report_text = generate_new_thread_report_text(
+        yesterday, threads)
+
+    # print(trend_report_text)
+    print(new_thread_report_text)
 
 
 def generate_trend_report_text(date: datetime, threads: List[ThreadStats], stats: Stats):
@@ -52,7 +56,9 @@ def generate_trend_report_text(date: datetime, threads: List[ThreadStats], stats
     for (i, thread) in enumerate(threads):
         rank = i + 1
         if rank > 32:
-            break
+            # 让并列的串也上榜
+            if thread.increased_response_count != threads[i-1].increased_response_count:
+                break
 
         lines += ['']
 
@@ -70,7 +76,38 @@ def generate_trend_report_text(date: datetime, threads: List[ThreadStats], stats
     lines += ['', f"{MAIN_DIVIDER_PART}　META　{MAIN_DIVIDER_PART}"]
     lines += [f"统计期间：共上传{stats.total_bandwidth_usage[0]}字节，下载{stats.total_bandwidth_usage[1]}字节。"]
 
-    return "\n".join(lines)
+    return '\n'.join(lines)
+
+
+def generate_new_thread_report_text(date: datetime, threads: List[ThreadStats]):
+
+    new_threads = list(filter(lambda x: x.is_new, threads))
+    new_threads = sorted(new_threads, key=lambda x: x.id)
+
+    lines = [
+        date.strftime("日度报告 新串 %Y-%m-%d"),
+        date.strftime("统计范围：当日上午4时～次日上午4时前"),
+        "＞以下所列新串将按发布时间倒序排列＜"
+    ]
+
+    lines += ['', f"{MAIN_DIVIDER_PART}　新串　{MAIN_DIVIDER_PART}"]
+
+    for thread in reversed(new_threads):
+        # 由于新串发得越早，积累回应的时间便越多，越有优势，这里排列就按时间反着来
+
+        lines += ['']
+
+        lines += [
+            "╭" + "┅" * 4
+            + thread.created_at.strftime('%m-%d %H:%M')
+            + "┅" * 4 + "╮"
+        ]
+        lines += [f">>No.{thread.id}"]
+        lines += thread.generate_summary(free_lines=5).split('\n')
+
+        # lines += [SUB_DIVIDER]
+
+    return '\n'.join(lines)
 
 
 @dataclass(frozen=True)
