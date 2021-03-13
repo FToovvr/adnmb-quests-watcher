@@ -87,3 +87,21 @@ CREATE TABLE post (
 
 CREATE UNIQUE INDEX idx__post__parent_thread_id__id ON post(parent_thread_id, id);
 CREATE UNIQUE INDEX idx__post__parent_thread_id__created_at__id ON post(parent_thread_id, created_at, id);
+
+CREATE TABLE publishing_trace (
+    id      INTEGER,
+    `date`  DATE    UNIQUE,
+    uuid    TEXT    UNIQUE,
+
+    attempts    NOT NULL    DEFAULT 0,
+
+    -- 是否已请求服务器发串
+    has_made_reply_request  BOOLEAN NOT NULL DEFAULT FALSE,
+    to_thread_id            INTEGER,
+    -- 如果找到所发的串则不为空
+    reply_post_id           INTEGER,
+    -- 所发的串是第几个回应
+    reply_offset            INTEGER,
+
+    PRIMARY KEY (id)
+)

@@ -1,4 +1,5 @@
 /venv
+__pycache__
 
 /export-*.sh
 /db.sqlite3
