@@ -31,6 +31,9 @@ def main():
     result = subprocess.run('./1_update_database.py')
     assert(result.returncode == 0)
 
+    result = subprocess.run('./3_publish_report.py')
+    assert(result.returncode == 0)
+
 
 if __name__ == '__main__':
     main()
