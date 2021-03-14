@@ -107,9 +107,6 @@ class DB:
 
     conn: sqlite3.Connection
 
-    def close(self):
-        self.conn.close()
-
     def __post_init__(self):
 
         # python 的 sqlite3 不支持 REGEXP
@@ -215,8 +212,8 @@ class DB:
 
         row = self.conn.execute(r'''
         SELECT 
-            sum(uploaded_bytes), sum(downloaded_bytes),
-            sum(requested_board_page_count), sum(requested_thread_page_count)
+            IFNULL(sum(uploaded_bytes), 0), IFNULL(sum(downloaded_bytes), 0),
+            IFNULL(sum(requested_board_page_count), 0), IFNULL(sum(requested_thread_page_count), 0)
         FROM activity
         WHERE fetched_since >= ? and fetched_since < ?
         ''', (lower_bound.timestamp(), upper_bound.timestamp())).fetchone()

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 from typing import Tuple, List, Dict, OrderedDict, Optional, Union
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import os
 import sqlite3
@@ -154,98 +154,141 @@ def find_last_post_with_uuid(thread_id: int) -> Optional[Tuple[int, str, int]]:
 
 
 def retrieve_data_then_generate_trend_report_text(date: datetime, uuid: str) -> Tuple[str, str, str]:
-    db = DB(conn=sqlite3.connect('file:db.sqlite3?mode=ro', uri=True))
-    post = generate_trend_report_text(date, db, uuid)
-    db.close()
-    return post
+    with sqlite3.connect('file:db.sqlite3?mode=ro', uri=True) as conn:
+        db = DB(conn=conn)
+        return TrendReportTextGenerator(
+            db=db,
+            date=date,
+            rank_limit=RANK_LIMIT,  # TODO: 允许由命令行参数改变
+            uuid=uuid,
+            should_compare_with_last_day=True,  # TODO: 同上
+        ).generate()
 
 
-def generate_trend_report_text(date: datetime, db: DB, uuid: str) -> Tuple[str, str, str]:
-    """
-    Returns
-    -------
-    [0] : str
-        标题。
-    [1] : str
-        名称。
-    [2] : str
-        正文。
-    """
+@dataclass(frozen=True)
+class TrendReportTextGenerator:
 
-    title = date.strftime("日度趋势 %Y-%m-%d")
-    name = "页 ❬1 / 1❭"
+    db: DB
 
-    # 由于引用中看不到标题和名称，将标题和名称额外放到正文中
-    lines = [
-        date.strftime(f"【 {ZWSP} 跑团版 趋势 日度报告〔%Y-%m-%d〕】"),
-        f"统计范围：当日上午4时～次日上午4时前",
-        "页 ❬1 / 1❭",
-        '',
-    ]
+    date: datetime
+    rank_limit: int
+    uuid: str
+    should_compare_with_last_day: bool
 
-    daily_qst = db.get_daily_qst(date, DAILY_QST_THREAD_ID)
-    if daily_qst is not None:
-        lines += [f"当期跑团日报：>>No.{daily_qst[0]}（P{(daily_qst[1]-1)//19+1}）", '']
+    threads: List[ThreadStats] = field(init=False)
 
-    threads = db.get_daily_threads(date)
+    def __post_init__(self):
+        object.__setattr__(self, 'threads',
+                           self.db.get_daily_threads(self.date))
+        object.__setattr__(self, 'counts', Counts(self.threads))
 
-    counts = Counts(threads)
+    def generate(self) -> Tuple[str, str, str]:
+        """
+        Returns
+        -------
+        [0] : str
+            标题。
+        [1] : str
+            名称。
+        [2] : str
+            正文。
+        """
 
-    # TODO: 参数决定是否与前日比较
-    class AttrsNone:
-        def __getattribute__(self, _):
+        title = self.date.strftime("日度趋势 %Y-%m-%d")
+        name = "页 ❬1 / 1❭"
+
+        content = self._generate_head() + '\n'
+        daily_qst_reference = self._generate_daily_qst_reference()
+        if daily_qst_reference is not None:
+            content += daily_qst_reference + '\n'
+        content += self._generate_summary() + '\n'
+
+        content += '\n'.join([self._format_heading("趋势"), '', ''])
+        content += self._generate_trending_board() + '\n'
+
+        misc_content = self._generate_misc()
+        if misc_content is not None:
+            content += '\n'.join([self._format_heading("杂项"), '', ''])
+            content += misc_content + '\n'
+
+        content += '\n'.join([self._format_heading("META"), '', ''])
+        content += self._generate_meta() + '\n'
+
+        return [title, name, content]
+
+    def _format_heading(self, name) -> str:
+        return f"{MAIN_DIVIDER_PART}　{name}　{MAIN_DIVIDER_PART}"
+
+    def _generate_head(self) -> str:
+        return '\n'.join([
+            self.date.strftime(f"【 {ZWSP} 跑团版 趋势 日度报告〔%Y-%m-%d〕】"),
+            f"统计范围：当日上午4时～次日上午4时前",
+            "页 ❬1 / 1❭", '',
+        ])
+
+    def _generate_daily_qst_reference(self) -> Optional[str]:
+        daily_qst = self.db.get_daily_qst(self.date, DAILY_QST_THREAD_ID)
+        if daily_qst is None:
             return None
-    counts_before = AttrsNone()
-    counts_before = Counts(db.get_daily_threads(date - timedelta(days=1)))
+        return '\n'.join([
+            f"当期跑团日报：>>No.{daily_qst[0]}（P{(daily_qst[1]-1)//19+1}）", '',
+        ])
 
-    def format_counts(counts: Counts, counts_before: Counts) -> str:
+    def _generate_summary(self) -> str:
+        class AttrsNone:
+            def __getattribute__(self, _):
+                return None
+        counts_before = AttrsNone()
+        if self.should_compare_with_last_day:
+            one_day_before = self.date - timedelta(days=1)
+            counts_before = Counts(self.db.get_daily_threads(one_day_before))
 
-        def format_value_with_delta(value: int, old_value: Optional[int]) -> str:
-            if old_value is None:
-                return str(value)
-            delta = value - old_value
-            if delta > 0:
-                return f"{value}(↑{delta})"
-            elif delta < 0:
-                return f"{value}(↓{abs(delta)})"
-            return f"{value}(→0)"
+        count_texts = self.__format_counts(self.counts, counts_before)
 
-        def format_q(q: List[float], old_q: List[float]) -> str:
-            if old_q is None:
-                old_q = [None] * len(q)
-            q_texts = [f"Q₁={format_value_with_delta(q[0], old_q[0])}"]
-            q_texts += [f"中位数={format_value_with_delta(q[1], old_q[1])}"]
-            q_texts += [f"Q₃={format_value_with_delta(q[2], old_q[2])}"]
-            return ' '.join(q_texts)
+        return '\n'.join(["统计范围内："] + list(map(lambda x: f"{ZWSP} ∗ {x}", count_texts))) + '\n'
 
+    def __format_counts(self, counts: Counts, counts_before: Counts) -> List[str]:
         return [
-            f"总计出现主题串 {format_value_with_delta(counts.threads, counts_before.threads)} 串",
-            f"新增主题串 {format_value_with_delta(counts.new_threads, counts_before.new_threads)} 串",
-            f"新增回应 {format_value_with_delta(counts.new_posts, counts_before.new_posts)} 条",
-            f"主题串新增回应 {format_q(counts.thread_new_post_quartiles, counts_before.thread_new_post_quartiles)}"
+            f"总计出现主题串 {self.__format_value_with_delta(counts.threads, counts_before.threads)} 串",
+            f"新增主题串 {self.__format_value_with_delta(counts.new_threads, counts_before.new_threads)} 串",
+            f"新增回应 {self.__format_value_with_delta(counts.new_posts, counts_before.new_posts)} 条",
+            f"主题串新增回应 {self.__format_q(counts.thread_new_post_quartiles, counts_before.thread_new_post_quartiles)}"
             # 没太大意义…
             # f"平均主题串新增回应 {counts.thread_new_post_average} 条，"
             # + f"中位 {counts.thread_new_post_median} 条，"
             # + f"S²={counts.thread_new_post_variance}"
         ]
 
-    count_texts = format_counts(counts, counts_before)
+    def __format_value_with_delta(self, value: int, old_value: Optional[int]) -> str:
+        if old_value is None:
+            return str(value)
+        delta = value - old_value
+        if delta > 0:
+            return f"{value}(↑{delta})"
+        elif delta < 0:
+            return f"{value}(↓{abs(delta)})"
+        return f"{value}(→0)"
 
-    lines += ["统计范围内："]
-    lines += list(map(lambda x: f"{ZWSP} ∗ {x}", count_texts))
+    def __format_q(self, q: List[float], old_q: List[float]) -> str:
+        if old_q is None:
+            old_q = [None] * len(q)
+        q_texts = [f"Q₁={self.__format_value_with_delta(q[0], old_q[0])}"]
+        q_texts += [f"中位数={self.__format_value_with_delta(q[1], old_q[1])}"]
+        q_texts += [f"Q₃={self.__format_value_with_delta(q[2], old_q[2])}"]
+        return ' '.join(q_texts)
 
-    lines += ['', f"{MAIN_DIVIDER_PART}　趋势　{MAIN_DIVIDER_PART}"]
-    # lines += [f"#01 ⇒ #{RANK_LIMIT:02d}"]
-
-    for (i, thread) in enumerate(threads):
-        rank = i + 1
-        if rank > RANK_LIMIT:
-            # 让并列的串也上榜
-            if thread.increased_response_count != threads[i-1].increased_response_count:
+    def _generate_trending_board(self) -> str:
+        lines = []
+        for (i, thread) in enumerate(self.threads):
+            rank = i + 1
+            if rank > self.rank_limit \
+                    and thread.increased_response_count != self.threads[i-1].increased_response_count:
                 break
+            lines += [self.__generate_thread_entry(thread, rank)]
 
-        lines += ['']
+        return '\n'.join(lines)
 
+    def __generate_thread_entry(self, thread: ThreadStats, rank: int) -> str:
         head = f"#{rank:02d}"
         if thread.is_new:
             head += f" [+{thread.increased_response_count} 回应 NEW!]"
@@ -253,7 +296,6 @@ def generate_trend_report_text(date: datetime, db: DB, uuid: str) -> Tuple[str, 
             head += f" [+{thread.increased_response_count} ={thread.total_reply_count} 回应]"
         head += f" [@{thread.created_at.strftime('%Y-%m-%d')}" \
             + f"{ thread.created_at.strftime(' %H:%M') if thread.is_new else ''}]"
-        lines += [head]
 
         subhead = []
         subhead += [f"(PO回应={thread.increased_response_count_by_po})"]
@@ -262,21 +304,30 @@ def generate_trend_report_text(date: datetime, db: DB, uuid: str) -> Tuple[str, 
             subhead += [f"(参与饼干≥{approx_distinct_cookie_count})"]
         else:
             subhead += [f"(参与饼干>0)"]
-        lines += ["　"*2 + " ".join(subhead)]
 
-        lines += [f">>No.{thread.id}"]
+        return '\n'.join([
+            head,
+            "　"*2 + ' '.join(subhead),
+            f">>No.{thread.id}",
+            thread.generate_summary(free_lines=3),
+            ZWSP.join([f"━━━━"]*4),
+            '',
+        ])
 
-        lines += thread.generate_summary(free_lines=3).split('\n')
+    def _generate_misc(self) -> Optional[str]:
+        entries = list(filter(lambda x: x is not None, [
+            self._generate_tail_frequencies_report(),
+            self._generate_consecutive_tails_report(),
+        ]))
+        if len(entries) > 0:
+            return '\n'.join(entries)
+        return None
 
-        lines += [ZWSP.join([f"━━━━"]*4)]
+    def _generate_tail_frequencies_report(self) -> Optional[str]:
+        (count, tail_frequencies) = self.db.get_tail_frequencies(self.date)
 
-    lines += ['', f"{MAIN_DIVIDER_PART}　其它　{MAIN_DIVIDER_PART}"]
-
-    tail_frequencies = db.get_tail_frequencies(date)
-
-    def format_tail_frequencies(count: int, tail_frequencies: OrderedDict[int, float]) -> str:
         if count == 0:
-            return ""
+            return None
 
         text = f"此间，「r」串尾出目频率 (n={count})：\n"
         if 0 in tail_frequencies:
@@ -290,63 +341,31 @@ def generate_trend_report_text(date: datetime, db: DB, uuid: str) -> Tuple[str, 
             text += ' '.join(f[i:i+4]) + ("（*最高/最低）" if i == 8 else "") + '\n'
         return text
 
-    lines += ['', format_tail_frequencies(tail_frequencies[0],
-                                          tail_frequencies[1])]
-
-    lucky_numbers = db.get_consecutive_tail_counts(date, 3)
-    if len(lucky_numbers) != 0:
-        lines += ["此间，串尾连号次数："]
-        lucky_lines = []
+    def _generate_consecutive_tails_report(self) -> Optional[str]:
+        lucky_numbers = self.db.get_consecutive_tail_counts(self.date, 3)
+        if len(lucky_numbers) == 0:
+            return None
+        lines = []
         for (n, count, zero_count) in lucky_numbers:
             text = "{} 连号 {} 次 ({:.2f}‰)，".format(
-                n, count, count / counts.new_posts * 1000)
+                n, count, count / self.counts.new_posts * 1000)
             if zero_count > 0:
                 text += "其中全 0 有 {} 次 ({:.2f}‰)".format(
-                    zero_count, zero_count / counts.new_posts * 1000)
+                    zero_count, zero_count / self.counts.new_posts * 1000)
             else:
                 text += "其中没有全 0"
-            lucky_lines += [text]
-        lines += ["；\n".join(lucky_lines) + "。"]
+            lines += [text]
+        lines += ["此间，串尾连号次数：", "；\n".join(lines) + "。", '']
+        return '\n'.join(lines)
 
-    lines += ['', META_MAIN_DIVIDER]
+    def _generate_meta(self) -> str:
+        stats = self.db.get_meta_stats(self.date)
 
-    stats = db.get_meta_stats(date)
-
-    lines += ['',
-              f"统计期间：共上传 {stats.total_bandwidth_usage[0] or 0:,} 字节，下载 {stats.total_bandwidth_usage[1] or 0:,} 字节。"]
-    lines += ['', f"UUID={uuid} # 定位用"]
-
-    return (title, name, '\n'.join(lines))
-
-
-def generate_new_thread_report_text(date: datetime, threads: List[ThreadStats]):
-
-    new_threads = list(filter(lambda x: x.is_new, threads))
-    new_threads = sorted(new_threads, key=lambda x: x.id)
-
-    lines = [
-        date.strftime("日度报告 新串 %Y-%m-%d"),
-        date.strftime("统计范围：当日上午4时～次日上午4时前"),
-        "＞以下所列新串将按发布时间倒序排列＜"
-    ]
-
-    lines += ['', f"{MAIN_DIVIDER_PART}　新串　{MAIN_DIVIDER_PART}"]
-
-    for thread in reversed(new_threads):
-        # 由于新串发得越早，积累回应的时间便越多，越有优势，这里排列就按时间反着来
-
-        lines += ['']
-
-        lines += [
-            "╭" + "┅" * 4
-            + thread.created_at.strftime('%m-%d %H:%M')
-            + "┅" * 5
-        ]
-        lines += [f">>No.{thread.id}"]
-        lines += thread.generate_summary(free_lines=5).split('\n')
-
-    return '\n'.join(lines)
-
+        return '\n'.join([
+            f"统计期间：共上传 {stats.total_bandwidth_usage[0]:,} 字节，"
+            + f"下载 {stats.total_bandwidth_usage[1]:,} 字节。", '',
+            f"UUID={self.uuid} # 定位用", ''
+        ])
 
 
 if __name__ == '__main__':
