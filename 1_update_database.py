@@ -12,20 +12,17 @@ import json
 import logging
 import logging.config
 
-from dateutil import tz
-
 import anobbsclient
 from anobbsclient.walk import create_walker, BoardWalkTarget, ReversalThreadWalkTarget
 
 # pylint: disable=import-error
-from commons import client
+from commons import client, local_tz
 
 # 默认单线程
 
 logging.config.fileConfig('logging.1_update_database.conf')
 
 BOARD_ID = 111  # 跑团版
-local_tz = tz.gettz('Asia/Shanghai')
 
 
 def main():

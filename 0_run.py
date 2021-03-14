@@ -4,9 +4,7 @@ from datetime import datetime, timedelta
 import os
 import subprocess
 
-from dateutil import tz
-
-local_tz = tz.gettz('Asia/Shanghai')
+from commons import local_tz
 
 LOG_FILE_PATH_FORMAT = 'logs/%Y-%m-%d'
 

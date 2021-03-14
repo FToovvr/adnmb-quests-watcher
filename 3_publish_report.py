@@ -11,31 +11,25 @@ import logging
 import logging.config
 import traceback
 import re
-import statistics
 
-from dateutil import tz
-from bs4 import BeautifulSoup
 import requests
 
 import anobbsclient
 from anobbsclient.walk import create_walker, ReversalThreadWalkTarget
 
-from commons import client, Trace
+from commons import client, Trace, local_tz, ZWSP, OMITTING
+from commons.stat_modal import ThreadStats, Counts, Stats, DB
 
 TREND_THREAD_ID = int(os.environ['ANOBBS_QUESTS_TREND_THREAD_ID'])
 DAILY_QST_THREAD_ID = int(os.environ['ANOBBS_QUESTS_DAILY_QST_THREAD_ID'])
 
-local_tz = tz.gettz('Asia/Shanghai')
 
 RANK_LIMIT = 32
 
-ZWSP = '\u200b'
-
 MAIN_DIVIDER_PART = f"══{ZWSP}══{ZWSP}══"
 META_MAIN_DIVIDER = f"{MAIN_DIVIDER_PART}　META　{MAIN_DIVIDER_PART}"
-OMITTING = ZWSP + "…"
 
-DEBUG_JUST_PRINT_REPORT = False
+DEBUG_JUST_PRINT_REPORT = True
 
 
 def main():
@@ -189,9 +183,9 @@ def generate_trend_report_text(date: datetime, db: DB, uuid: str) -> Tuple[str, 
         '',
     ]
 
-    daily_qst = db.get_daily_qst(date)
+    daily_qst = db.get_daily_qst(date, DAILY_QST_THREAD_ID)
     if daily_qst is not None:
-        lines += [f"当期跑团日报：>>No.{daily_qst[1]}（P{(daily_qst[2]-1)//19+1}）", '']
+        lines += [f"当期跑团日报：>>No.{daily_qst[0]}（P{(daily_qst[1]-1)//19+1}）", '']
 
     threads = db.get_daily_threads(date)
 
@@ -348,284 +342,6 @@ def generate_new_thread_report_text(date: datetime, threads: List[ThreadStats]):
 
     return '\n'.join(lines)
 
-
-@dataclass(frozen=True)
-class ThreadStats:
-    id: int
-    created_at: datetime
-    is_new: bool
-    title: Optional[str]
-    name: Optional[str]
-    raw_content: str
-    increased_response_count: int
-    total_reply_count: int
-    increased_response_count_by_po: int
-    distinct_cookie_count: int
-
-    @property
-    def content(self) -> str:
-        return BeautifulSoup(self.raw_content, features='html.parser').get_text()
-
-    def generate_summary(self, free_lines: int) -> str:
-        lines = []
-        if self.title is not None:
-            title = self.title.replace(ZWSP, '')
-            if len(title) > 15:  # 以防万一
-                title = title[:14] + OMITTING
-            free_lines -= 1
-            lines += [f"标题：{title}"]
-        if self.name is not None:
-            name = self.name.replace(ZWSP, '')
-            if len(name) > 15:  # 以防万一
-                name = name[:14] + OMITTING
-            free_lines -= 1
-            lines += [f"名称：{name}"]
-        for content_line in self.content.split('\n'):
-            if free_lines == 0:
-                lines += [OMITTING]
-                break
-            content_line = content_line.rstrip()
-            line_to_add = ""
-            for line_part in [content_line[i: i+16] for i in range(0, len(content_line), 16)]:
-                if free_lines == 0:
-                    line_to_add += OMITTING
-                    break
-                line_to_add += line_part.replace(ZWSP, '')
-                free_lines -= 1
-            lines += [line_to_add]
-        while True:
-            if lines[-1].strip() == "":
-                lines.pop()
-            else:
-                break
-
-        return "\n".join(lines)
-
-
-@dataclass  # (frozen=True)
-class Counts:
-
-    threads: int
-    new_threads: int
-    new_posts: int
-
-    thread_new_post_average: int
-    thread_new_post_quartiles: List[Union[float, int]]
-    thread_new_post_variance: float
-
-    def __init__(self, threads: List[ThreadStats]):
-        self.threads = len(threads)
-        self.new_threads = len(list(filter(lambda x: x.is_new, threads)))
-        new_post_counts = list(
-            map(lambda x: x.increased_response_count, threads))
-        self.new_posts = sum(new_post_counts)
-
-        self.thread_new_post_average = self.new_posts / self.threads
-        q = statistics.quantiles(new_post_counts)
-        q = list(map(lambda x: int(x) if x.is_integer else x, q))
-        self.thread_new_post_quartiles = q
-        self.thread_new_post_variance = statistics.variance(new_post_counts)
-
-
-@dataclass(frozen=True)
-class Stats:
-    total_bandwidth_usage: anobbsclient.BandwidthUsage
-
-
-@dataclass(frozen=True)
-class DB:
-
-    conn: sqlite3.Connection
-
-    def close(self):
-        self.conn.close()
-
-    def __post_init__(self):
-
-        # python 的 sqlite3 不支持 REGEXP
-        def rx_test(pattern: str, string: str) -> bool:
-            return re.search(pattern, string) is not None
-        self.conn.create_function("rx_test", 2, rx_test)
-
-        def rx_nth_match(pattern: str, string: str, nth: int) -> Optional[str]:
-            r = re.match(pattern, string)
-            return None if r is None else r.group(nth)
-        self.conn.create_function("rx_nth_match", 3, rx_nth_match)
-
-    def get_daily_threads(self, date: datetime) -> List[ThreadStats]:
-        lower_bound, upper_bound = self._get_boundaries(date)
-
-        rows = self.conn.execute(r'''
-            WITH later_changes AS (
-                SELECT
-                    parent_thread_id AS thread_id,
-                    count(post.id) AS increased_response_count
-                FROM post
-                LEFT JOIN thread ON post.parent_thread_id = thread.id
-                WHERE post.created_at >= ?
-                GROUP BY parent_thread_id
-            )
-            SELECT
-                parent_thread_id,
-                thread.created_at,
-                thread.title,
-                thread.name,
-                thread.content,
-                count(post.id) AS increased_response_count,
-                thread.current_reply_count - COALESCE(later_changes.increased_response_count, 0),
-                SUM(CASE WHEN post.user_id = thread.user_id THEN 1 ELSE 0 END),
-                count(DISTINCT post.user_id)
-            FROM post
-            LEFT JOIN thread ON post.parent_thread_id = thread.id
-            LEFT JOIN later_changes ON thread.id = later_changes.thread_id
-            WHERE post.created_at >= ? and post.created_at < ?
-            GROUP BY parent_thread_id
-            ORDER BY increased_response_count DESC
-        ''', (upper_bound.timestamp(), lower_bound.timestamp(), upper_bound.timestamp())).fetchall()
-
-        threads: List[ThreadStats] = []
-        for row in rows:
-            created_at = datetime.fromtimestamp(row[1], tz=local_tz)
-            threads.append(ThreadStats(
-                id=row[0],
-                created_at=created_at,
-                is_new=created_at >= lower_bound and created_at < upper_bound,
-                title=row[2],
-                name=row[3],
-                raw_content=row[4],
-                increased_response_count=row[5],
-                total_reply_count=row[6],
-                increased_response_count_by_po=row[7],
-                distinct_cookie_count=row[8],
-            ))
-
-        return threads
-
-    def get_daily_qst(self, date: datetime) -> Optional[Tuple[int, int, int]]:
-        """
-        获取该日的跑团日报。
-
-        Returns
-        -------
-        [0] : int
-            日报串的串号。
-        [1] : int
-            该日日报的串号。
-        [2] : int
-            该日日报的偏移。
-
-            如果在日报发布后到本次统计期间，有在此之后的回应被删，可能会前移。
-        """
-        lower_bound, upper_bound = self._get_boundaries(date)
-
-        row = self.conn.execute(r'''
-            WITH daily_qst_replies_in_range AS (
-                SELECT id, content
-                FROM post
-                WHERE parent_thread_id = ?
-                    AND created_at >= ? and created_at < ?
-            )
-            SELECT
-                a.id, current_reply_count - count(b.id)
-            FROM daily_qst_replies_in_range AS a
-            JOIN daily_qst_replies_in_range AS b ON b.id > a.id
-            LEFT JOIN thread ON thread.id = ?
-            WHERE rx_test("(.*\n)*\[头条\]\s*(<br />)?(\n.*)+", a.content)
-			GROUP BY a.id
-			ORDER BY a.id DESC
-			LIMIT 1
-        ''', (
-            DAILY_QST_THREAD_ID,
-            lower_bound.timestamp(), upper_bound.timestamp(),
-            DAILY_QST_THREAD_ID,
-        )).fetchone()
-
-        return None if row is None else (DAILY_QST_THREAD_ID, row[0], row[1])
-
-    def get_meta_stats(self, date: datetime) -> Stats:
-        lower_bound, upper_bound = self._get_boundaries(date)
-
-        row = self.conn.execute(r'''
-        SELECT 
-            sum(uploaded_bytes), sum(downloaded_bytes),
-            sum(requested_board_page_count), sum(requested_thread_page_count)
-        FROM activity
-        WHERE fetched_since >= ? and fetched_since < ?
-        ''', (lower_bound.timestamp(), upper_bound.timestamp())).fetchone()
-
-        return Stats((row[0], row[1]))
-
-    def get_tail_frequencies(self, date: datetime) -> Tuple[int, Dict[int, float]]:
-        lower_bound, upper_bound = self._get_boundaries(date)
-
-        rows = self.conn.execute(r'''
-            WITH tail_count AS (
-                WITH post_tail AS (
-                    SELECT id % 10 AS tail_number
-                    FROM post
-                    WHERE created_at >= ? and created_at < ?
-                        AND content LIKE 'r'
-                )
-                SELECT tail_number, count(tail_number) AS `count`
-                FROM post_tail
-                GROUP BY tail_number
-            )
-            SELECT tail_number, `count` * 1.0 / (SELECT sum(`count`) FROM tail_count) * 100 AS percentage
-            FROM tail_count
-        ''', (lower_bound.timestamp(), upper_bound.timestamp())).fetchall()
-
-        frequencies = OrderedDict({r[0]: r[1] for r in rows})
-
-        count = self.conn.execute(r'''
-            SELECT count(id) FROM post
-            WHERE created_at >= ? and created_at < ?
-                AND content LIKE 'r'
-        ''', (lower_bound.timestamp(), upper_bound.timestamp())).fetchone()[0]
-
-        return (count, frequencies)
-
-    def get_consecutive_tail_counts(self, date: datetime, n: int) -> Tuple[int, int, int]:
-        """
-        Returns
-        -------
-        [0]
-            位数。
-        [1]
-            个数。
-        [2]
-            0 的个数。
-        """
-        lower_bound, upper_bound = self._get_boundaries(date)
-
-        rows = self.conn.execute(r'''
-        WITH lucky_tail_info AS (
-            WITH lucky_tail AS (
-                SELECT rx_nth_match("\d+?((\d)\2+)$", cast(id AS TEXT), 1) AS tail
-                FROM post
-                WHERE created_at >= ? and created_at < ?
-                    AND rx_test("(\d)\1{" || ? || ",}$", cast(id AS TEXT))
-                ORDER BY id
-            )
-            SELECT
-                length(tail) AS length,
-                cast(tail AS INTEGER) = 0 AS is_zero
-            FROM lucky_tail
-        )
-        SELECT
-            length,
-            COUNT(*) AS `count`,
-            SUM(is_zero) AS `zero_count`
-        FROM lucky_tail_info
-        GROUP BY length
-        ORDER BY length DESC
-        ''', (lower_bound.timestamp(), upper_bound.timestamp(), n-1))
-
-        return rows.fetchall()
-
-    def _get_boundaries(self, date: datetime) -> Tuple[datetime, datetime]:
-        lower_bound = date.replace(hour=4, minute=0, second=0, microsecond=0)
-        upper_bound = lower_bound + timedelta(days=1)
-        return (lower_bound, upper_bound)
 
 
 if __name__ == '__main__':
