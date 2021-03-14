@@ -275,8 +275,12 @@ def generate_trend_report_text(date: datetime, db: DB, uuid: str) -> Tuple[str, 
     tail_frequencies = db.get_tail_frequencies(date)
 
     def format_tail_frequencies(count: int, tail_frequencies: OrderedDict[int, float]) -> str:
+        if count == 0:
+            return ""
+
         text = f"此间，「r」串尾出目频率 (n={count})：\n"
-        tail_frequencies.move_to_end(0)
+        if 0 in tail_frequencies:
+            tail_frequencies.move_to_end(0)
         f = list(reversed(tail_frequencies.items()))
         f_max_min = [max(f, key=lambda x: x[1])[0],
                      min(f, key=lambda x: x[1])[0]]
@@ -290,25 +294,26 @@ def generate_trend_report_text(date: datetime, db: DB, uuid: str) -> Tuple[str, 
                                           tail_frequencies[1])]
 
     lucky_numbers = db.get_consecutive_tail_counts(date, 3)
-    lines += ["此间，串尾连号次数："]
-    lucky_lines = []
-    for (n, count, zero_count) in lucky_numbers:
-        text = "{} 连号 {} 次 ({:.2f}‰)，".format(
-            n, count, count / counts.new_posts * 1000)
-        if zero_count > 0:
-            text += "其中全 0 有 {} 次 ({:.2f}‰)".format(
-                zero_count, zero_count / counts.new_posts * 1000)
-        else:
-            text += "其中没有全 0"
-        lucky_lines += [text]
-    lines += ["；\n".join(lucky_lines) + "。"]
+    if len(lucky_numbers) != 0:
+        lines += ["此间，串尾连号次数："]
+        lucky_lines = []
+        for (n, count, zero_count) in lucky_numbers:
+            text = "{} 连号 {} 次 ({:.2f}‰)，".format(
+                n, count, count / counts.new_posts * 1000)
+            if zero_count > 0:
+                text += "其中全 0 有 {} 次 ({:.2f}‰)".format(
+                    zero_count, zero_count / counts.new_posts * 1000)
+            else:
+                text += "其中没有全 0"
+            lucky_lines += [text]
+        lines += ["；\n".join(lucky_lines) + "。"]
 
     lines += ['', META_MAIN_DIVIDER]
 
     stats = db.get_meta_stats(date)
 
     lines += ['',
-              f"统计期间：共上传 {stats.total_bandwidth_usage[0]:,} 字节，下载 {stats.total_bandwidth_usage[1]:,} 字节。"]
+              f"统计期间：共上传 {stats.total_bandwidth_usage[0] or 0:,} 字节，下载 {stats.total_bandwidth_usage[1] or 0:,} 字节。"]
     lines += ['', f"UUID={uuid} # 定位用"]
 
     return (title, name, '\n'.join(lines))
