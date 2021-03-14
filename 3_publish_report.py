@@ -11,8 +11,10 @@ import logging
 import logging.config
 import traceback
 import re
+from time import sleep
 
 import requests
+from bs4 import BeautifulSoup
 
 import anobbsclient
 from anobbsclient.walk import create_walker, ReversalThreadWalkTarget
@@ -29,7 +31,8 @@ RANK_LIMIT = 32
 MAIN_DIVIDER_PART = f"══{ZWSP}══{ZWSP}══"
 META_MAIN_DIVIDER = f"{MAIN_DIVIDER_PART}　META　{MAIN_DIVIDER_PART}"
 
-DEBUG_JUST_PRINT_REPORT = True
+DEBUG_JUST_PRINT_REPORT = False
+DEBUG_NOTIFY_TO_TREND_THREAD = False
 
 
 def main():
@@ -101,6 +104,23 @@ def main():
 
     trace.report_found_reply_post(thread_id=TREND_THREAD_ID,
                                   post_id=post_id, offset=offset)
+
+    # TODO: 检查成功与否
+    # TODO: 开关决定是否通知
+    notify_to_thread_id = DAILY_QST_THREAD_ID
+    if DEBUG_NOTIFY_TO_TREND_THREAD:
+        notify_to_thread_id = TREND_THREAD_ID
+    logging.info(f"将发送报告出炉通知。由于发串间隔限制，将等待30秒")
+    sleep(30)
+    client.reply_thread(
+        to_thread_id=notify_to_thread_id,
+        title="本期跑团版趋势报告已出炉",
+        name=yesterday.strftime("%Y-%m-%d"),
+        content='\n'.join([
+            yesterday.strftime("%Y年%-m月%-d日 跑团版 趋势日度报告："),
+            f">>No.{post_id}（位于原串第{(offset-1) // 19 + 1}页）",
+        ]),
+    )
 
     logging.info("成功结束")
 
@@ -231,7 +251,7 @@ class TrendReportTextGenerator:
         if daily_qst is None:
             return None
         return '\n'.join([
-            f"当期跑团日报：>>No.{daily_qst[0]}（P{(daily_qst[1]-1)//19+1}）", '',
+            f"当期跑团日报：>>No.{daily_qst[0]}（位于原串第{(daily_qst[1]-1)//19+1}页）", '',
         ])
 
     def _generate_summary(self) -> str:
@@ -355,8 +375,7 @@ class TrendReportTextGenerator:
             else:
                 text += "其中没有全 0"
             lines += [text]
-        lines += ["此间，串尾连号次数：", "；\n".join(lines) + "。", '']
-        return '\n'.join(lines)
+        return '\n'.join(["此间，串尾连号次数：", "；\n".join(lines) + "。", ''])
 
     def _generate_meta(self) -> str:
         stats = self.db.get_meta_stats(self.date)
