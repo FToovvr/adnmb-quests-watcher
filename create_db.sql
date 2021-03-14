@@ -90,6 +90,7 @@ CREATE UNIQUE INDEX idx__post__parent_thread_id__created_at__id ON post(parent_t
 
 CREATE TABLE publishing_trace (
     id      INTEGER,
+    -- 所发报告的日期，而非发送时的日期
     `date`  DATE    UNIQUE,
     uuid    TEXT    UNIQUE,
 

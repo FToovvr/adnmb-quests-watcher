@@ -20,15 +20,15 @@ class Trace:
 
     def __post_init__(self):
 
-        row = self.conn.execute('''
+        row = self.conn.execute(r'''
             SELECT date FROM publishing_trace
-            ORDER BY id LIMIT 1
+            ORDER BY id DESC LIMIT 1
         ''').fetchone()
 
         if row is None or date.fromisoformat(row[0]) < self.date:
             # 本日尚未尝试发布报告
 
-            self.conn.execute('''
+            self.conn.execute(r'''
                 INSERT INTO publishing_trace (`date`, uuid)
                 VALUES (?, ?)
             ''', (self.date, str(uuid.uuid4())))
@@ -40,14 +40,14 @@ class Trace:
 
     @property
     def attempts(self) -> int:
-        return self.conn.execute('''
+        return self.conn.execute(r'''
             SELECT attempts FROM publishing_trace
             WHERE `date` = ?
         ''', (self.date,)).fetchone()[0]
 
     @attempts.setter
     def attempts(self, value: int):
-        self.conn.execute('''
+        self.conn.execute(r'''
             UPDATE publishing_trace
             SET attempts = ?
             WHERE `date` = ?
@@ -56,20 +56,20 @@ class Trace:
 
     @property
     def reply_post_id(self) -> Optional[int]:
-        return self.conn.execute('''
+        return self.conn.execute(r'''
             SELECT reply_post_id FROM publishing_trace
             WHERE `date` = ?
         ''', (self.date,)).fetchone()[0]
 
     @property
     def has_made_reply_request(self) -> bool:
-        return self.conn.execute('''
+        return self.conn.execute(r'''
             SELECT has_made_reply_request FROM publishing_trace
             WHERE `date` = ?
         ''', (self.date,)).fetchone()[0] == 1
 
     def report_made_reply_request(self):
-        self.conn.execute('''
+        self.conn.execute(r'''
             UPDATE publishing_trace
             SET has_made_reply_request = TRUE
             WHERE `date` = ?
@@ -77,7 +77,7 @@ class Trace:
         self.conn.commit()
 
     def report_found_reply_post(self, thread_id: int, post_id: int, offset: int):
-        self.conn.execute('''
+        self.conn.execute(r'''
             UPDATE publishing_trace
             SET
                 has_made_reply_request = TRUE,
@@ -90,7 +90,7 @@ class Trace:
 
     @property
     def uuid(self) -> str:
-        return self.conn.execute('''
+        return self.conn.execute(r'''
             SELECT uuid FROM publishing_trace
             WHERE `date` = ?
         ''', (self.date,)).fetchone()[0]
