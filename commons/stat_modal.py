@@ -6,7 +6,7 @@ import sqlite3
 import re
 import statistics
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 import anobbsclient
 
@@ -64,6 +64,22 @@ class ThreadStats:
                 break
 
         return "\n".join(lines)
+
+    @property
+    def blue_text(self) -> Optional[str]:
+        soup = BeautifulSoup(self.raw_content, features='html.parser')
+
+        def find_fn(tag: Tag):
+            if tag.name == 'font':
+                return re.match(r'^\s*blue\s*$', tag.get('color', '')) is not None
+            if tag.name == 'span':
+                return re.match(r'^.*;?\s*color:\s*blue\s*;?.*$', tag.get('style', '')) is not None
+            return False
+
+        elems = soup.find_all(find_fn)
+        if len(elems) == 0:
+            return None
+        return elems[-1].get_text()
 
 
 @dataclass  # (frozen=True)

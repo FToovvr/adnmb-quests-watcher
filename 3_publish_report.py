@@ -28,7 +28,7 @@ DAILY_QST_THREAD_ID = int(os.environ['ANOBBS_QUESTS_DAILY_QST_THREAD_ID'])
 
 
 RANK_INCLUSION_METHOD = 'q3'
-RANK_LIMIT = 50
+RANK_LIMIT = 20
 RANK_MIN_INCREASED_REPLY_COUNT = 20
 
 
@@ -48,7 +48,7 @@ def RANK_INCLUDING(thread: ThreadStats, method: str,
 
 
 # 每页收录数目
-RANK_PAGE_CAPACITY = 25
+RANK_PAGE_CAPACITY = 20
 
 MAIN_DIVIDER_PART = f"══{ZWSP}══{ZWSP}══"
 META_MAIN_DIVIDER = f"{MAIN_DIVIDER_PART}　META　{MAIN_DIVIDER_PART}"
@@ -63,6 +63,11 @@ if DEBUGGING_SCENARIO.startswith('preview'):
     if DEBUGGING_SCENARIO.endswith('-'):
         RANK_INCLUSION_METHOD = 'top_n'
         RANK_LIMIT = 1
+elif DEBUGGING_SCENARIO == 'publish_only':
+    DEBUG_JUST_PRINT_REPORT = False
+    DEBUG_NOTIFY_TO_TREND_THREAD = False
+    DEBUG_DONT_NOTIFY = True
+    DEBUG_DONT_CHECK_IF_SAGE = False
 elif DEBUGGING_SCENARIO.startswith('notify'):
     DEBUG_JUST_PRINT_REPORT = False
     DEBUG_NOTIFY_TO_TREND_THREAD = True
@@ -465,22 +470,32 @@ class TrendReportTextGenerator:
         head += f" [@{thread.created_at.strftime('%Y-%m-%d')}" \
             + f"{ thread.created_at.strftime(' %H:%M') if thread.is_new else ''}]"
 
-        subhead = []
-        subhead += [f"(PO回应={thread.increased_response_count_by_po})"]
+        subhead_lines = []
+
+        subhead_1 = []
+        subhead_1 += [f"(PO回应={thread.increased_response_count_by_po})"]
         approx_distinct_cookie_count = thread.distinct_cookie_count//5*5
         if approx_distinct_cookie_count != 0:
-            subhead += [f"(参与饼干≥{approx_distinct_cookie_count})"]
+            subhead_1 += [f"(参与饼干≥{approx_distinct_cookie_count})"]
         else:
-            subhead += [f"(参与饼干>0)"]
+            subhead_1 += [f"(参与饼干>0)"]
+        subhead_lines += [' '.join(subhead_1)]
 
-        return '\n'.join([
-            head,
-            f'{ZWSP} ' * padding + ' '.join(subhead),
-            f">>No.{thread.id}",
-            thread.generate_summary(free_lines=3),
-            ZWSP.join([f"━━━━"]*4),
-            '',
-        ])
+        blue_text = thread.blue_text
+        if blue_text is not None:
+            if len(blue_text) > 8:
+                blue_text = blue_text[:8] + OMITTING
+            subhead_lines += [f"(蓝字：{blue_text})"]
+
+        return '\n'.join(
+            [head]
+            + list(map(lambda x: f'{ZWSP} ' * padding + x, subhead_lines))
+            + [
+                f">>No.{thread.id}",
+                thread.generate_summary(free_lines=3),
+                ZWSP.join([f"━━━━"]*4),
+                '',
+            ])
 
     def _generate_misc(self) -> Optional[str]:
         entries = list(filter(lambda x: x is not None, [
