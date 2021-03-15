@@ -257,11 +257,11 @@ class DB:
         self.conn.isolation_level = None  # 禁用自动提交
 
         cur = self.conn.cursor()
-        cur.execute('''
+        cur.execute(r'''
             INSERT INTO activity (run_at, is_successful)
             VALUES (?, ?)
         ''', (datetime.now().timestamp(), False))
-        activity_id = cur.execute('''
+        activity_id = cur.execute(r'''
             SELECT id FROM activity WHERE rowid = ?
         ''', (cur.lastrowid,)).fetchone()[0]
         cur.close()
@@ -277,7 +277,7 @@ class DB:
     @property
     def never_runs(self) -> bool:
         """返回是否从未运行过一次。"""
-        never_runs = self.conn.execute('''
+        never_runs = self.conn.execute(r'''
             SELECT count(id) = 0 FROM activity 
             WHERE is_successful = true AND ensured_fetched_until IS NOT NULL
             ''').fetchone()[0]
@@ -290,7 +290,7 @@ class DB:
             f'正在汇报本次活动计划的抓取时间范围下限。活动 ID = {self.activity_id}，'
             + f'此下限 = {should_fetch_since}')
 
-        self.conn.execute('''
+        self.conn.execute(r'''
             UPDATE activity SET fetched_since = ?
             WHERE id = ?
         ''', (should_fetch_since.timestamp(), self.activity_id))
@@ -310,7 +310,7 @@ class DB:
             # 若第一次运行，以5分钟前作为抓取的时间下界
             return datetime.now().replace(tzinfo=local_tz) - timedelta(minutes=5)
 
-        last_activity_fetched_until = self.conn.execute('''
+        last_activity_fetched_until = self.conn.execute(r'''
             SELECT ensured_fetched_until FROM activity 
             WHERE is_successful = true AND ensured_fetched_until IS NOT NULL
             ORDER BY ensured_fetched_until DESC LIMIT 1
@@ -322,7 +322,7 @@ class DB:
             f'正在汇报本次活动可确保的抓取时间范围上限。活动 ID = {self.activity_id}，'
             + f'此上限 = {ensured_fetched_until}')
 
-        self.conn.execute('''
+        self.conn.execute(r'''
             UPDATE activity SET ensured_fetched_until = ?
             WHERE id = ?
         ''', (ensured_fetched_until.timestamp(), self.activity_id))
@@ -331,7 +331,7 @@ class DB:
         self.logger.info(f'已汇报本次活动可确保的抓取时间范围上限。活动 ID = {self.activity_id}')
 
     def try_find_thread_latest_seen_reply_id(self, thread_id: int) -> Optional[int]:
-        row = self.conn.execute('''
+        row = self.conn.execute(r'''
             SELECT id FROM post WHERE parent_thread_id = ?
             ORDER BY id DESC LIMIT 1
         ''', (thread_id,)).fetchone()
@@ -342,9 +342,31 @@ class DB:
     def record_thread(self, thread: anobbsclient.BoardThread):
         self.logger.info(f'正在记录/更新串信息。串号 = {thread.id}')
 
-        # 这样暴力地 replace 就成了，反正每次抓取都会抓取到全部的 fields
-        # 不在这里记录 current_reply_count, 因为为了准确需要在抓取完其中的
-        self.conn.execute('''
+        # TODO: 是否考虑 sage？
+        old = self.conn.execute(r'''
+            SELECT content, name, email, title
+            FROM thread WHERE id = ?
+        ''', (thread.id,)).fetchone()
+
+        if old is not None \
+            and (old[0] != thread.content or old[1] != thread.name
+                 or old[2] != thread.email or old[3] != thread.title):
+            now = datetime.now(tz=local_tz).timestamp()
+            self.logger.info(f'串内容发生变化，将归档当前版本。串号 = {thread.id}，现时时间戳 = {now}')
+            self.conn.execute(r'''
+                INSERT INTO thread_old_revision (
+                    id, not_anymore_at_least_after,
+                    content, name, email, title
+                ) VALUES (?, ?, ?, ?, ?, ?)
+            ''', (
+                thread.id, now,  # 偷懒
+                old[0], old[1], old[2], old[3],
+            ))
+
+        # 这样暴力地 replace 就成了，反正每次抓取都会抓取到全部的 fields。
+        # 不在这里记录 current_reply_count,
+        # 因为为了准确，需要在抓取完其中的所有新回应时再记录当时的总回应数
+        self.conn.execute(r'''
             INSERT OR REPLACE INTO thread (
                 id, created_at, user_id, content,
                 attachment_base, attachment_extension,
@@ -385,16 +407,16 @@ class DB:
                          + f'新记录回应数 = {len(replies)}，更新的回应总数 = {total_reply_count}')
 
         cur = self.conn.cursor()
-        cur.execute('BEGIN')
+        cur.execute(r'BEGIN')
 
-        self.conn.execute('''
+        self.conn.execute(r'''
             UPDATE thread SET current_reply_count = ?
-            WHERE id =?
+            WHERE id = ?
         ''', (total_reply_count, thread.id))
 
         for post in replies:
             # 重复 insert post 是出现了 bug 的征兆
-            self.conn.execute('''
+            self.conn.execute(r'''
                 INSERT INTO post (
                     id, parent_thread_id, created_at, user_id, content,
                     attachment_base, attachment_extension,
@@ -410,19 +432,19 @@ class DB:
                 post.name, post.email, post.title, DB.__extract_misc_fields(thread)),
             )
 
-        cur.execute('COMMIT')
+        cur.execute(r'COMMIT')
         cur.close()
 
         self.logger.info(f'已记录串中新抓取到的回应。串号 = {thread.id}')
 
     def get_thread_total_reply_count(self, thread_id: int) -> int:
-        return self.conn.execute('''
+        return self.conn.execute(r'''
             SELECT current_reply_count FROM thread
             WHERE id = ?
         ''', (thread_id,)).fetchone()[0]
 
     def is_thread_recorded(self, thread_id: int) -> bool:
-        return self.conn.execute('''
+        return self.conn.execute(r'''
             SELECT count(id) FROM thread WHERE id = ?
         ''', (thread_id,)).fetchone()[0] == 1
 
@@ -462,7 +484,7 @@ class DB:
             + f'请求版块页面次数 = {stats.board_request_count}，请求串页面次数 = {stats.thread_request_count}，'
             + f'以登录状态请求串页面次数 = {stats.logged_in_thread_request_count}')
 
-        self.conn.execute('''
+        self.conn.execute(r'''
             UPDATE activity
             SET is_successful = ?, message = ?,
                 uploaded_bytes = ?, downloaded_bytes = ?,

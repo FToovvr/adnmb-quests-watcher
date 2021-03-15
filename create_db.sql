@@ -68,6 +68,25 @@ CREATE INDEX IF NOT EXISTS idx__thread_user_id
 CREATE UNIQUE INDEX IF NOT EXISTS idx__thread__created_at__id
     ON thread(created_at, id);
 
+CREATE TABLE IF NOT EXISTS thread_old_revision (
+    id  INTEGER,
+
+    -- 至少在这个时点之后就与这个版本的内容有不同了
+    not_anymore_at_least_after  INTEGER,
+
+    content TEXT    NOT NULL,
+    name    TEXT    NOT NULL,
+    email   TEXT    NOT NULL,
+    title   TEXT    NOT NULL,
+
+    -- 从实用角度出发，不可能有两次修改在同一秒
+    PRIMARY KEY (id, not_anymore_at_least_after),
+    FOREIGN KEY (id) REFERENCES thread (id)
+);
+
+CREATE INDEX IF NOT EXISTS idx__thread_old_revision__not_anymore_at_least_after
+    ON thread_old_revision (not_anymore_at_least_after);
+
 CREATE TABLE IF NOT EXISTS post (
     id                      INTEGER,
     -- +

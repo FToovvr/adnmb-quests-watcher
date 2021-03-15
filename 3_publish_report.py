@@ -91,16 +91,23 @@ else:
     DEBUG_DONT_CHECK_IF_SAGE = False
 
 
+DEBUG_TARGET_DATE = None  # "2021-03-15"
+
+
 def main():
 
-    now = datetime.now(tz=local_tz)
-    if now.time() < time(hour=4):
-        now -= timedelta(hours=5)
-    yesterday = now - timedelta(days=1)
+    if DEBUG_TARGET_DATE is None:
+        now = datetime.now(tz=local_tz)
+        if now.time() < time(hour=4):
+            now -= timedelta(hours=5)
+        target_date = now - timedelta(days=1)
+    else:
+        target_date = datetime.fromisoformat(
+            DEBUG_TARGET_DATE).replace(tzinfo=local_tz)
 
     if not DEBUG_JUST_PRINT_REPORT:
         trace = Trace(conn=sqlite3.connect('db.sqlite3'),
-                      date=now.date(), type_='trend')
+                      date=target_date.date(), type_='trend')
         attempts = trace.attempts
         if trace.is_done or attempts > 3:
             return
@@ -121,7 +128,7 @@ def main():
     else:
         uuid = None
 
-    pages = retrieve_data_then_generate_trend_report_text(yesterday, uuid)
+    pages = retrieve_data_then_generate_trend_report_text(target_date, uuid)
 
     if DEBUG_JUST_PRINT_REPORT:
         for (title, name, content) in pages:
@@ -205,7 +212,7 @@ def main():
         sleep(30)
 
         posts = trace.reply_posts
-        content = yesterday.strftime(
+        content = target_date.strftime(
             f"%Y年%-m月%-d日 跑团版 趋势日度报告：\n")
         content += '\n'.join(
             list(map(lambda x: f">>No.{x.reply_post_id}", posts))
@@ -220,8 +227,8 @@ def main():
 
         client.reply_thread(
             to_thread_id=notify_to_thread_id,
-            title="本期跑团版趋势报告新鲜出炉",
-            name=yesterday.strftime("%Y年%-m月%-d日 号"),
+            title="本期跑团版趋势报告出炉",
+            name=target_date.strftime("%Y年%-m月%-d日 号"),
             content=content,
         )
 
@@ -381,7 +388,7 @@ class TrendReportTextGenerator:
     def _generate_head(self, page_number: int, total_page_number: int) -> str:
         return '\n'.join([
             self.date.strftime(f"【 {ZWSP} 跑团版 趋势 日度报告〔%Y-%m-%d〕】"),
-            f"页 ❬{page_number} / {total_page_number}❭",
+            f"　 {ZWSP} 第 ❬{page_number} / {total_page_number}❭ 页",
             f"统计范围：当日上午4时～次日上午4时前",
             '',
         ])
