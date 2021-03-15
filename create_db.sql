@@ -1,7 +1,7 @@
 --- TIMESTAMP 时区皆为 UTC
 
 --- 记录以往的运行活动
-CREATE TABLE activity (
+CREATE TABLE IF NOT EXISTS activity (
     id                      INTEGER,
 
     -- 本次活动开始执行的时间
@@ -37,10 +37,12 @@ CREATE TABLE activity (
     PRIMARY KEY (id)
 );
 
-CREATE INDEX idx__activity__run_at ON activity(run_at);
-CREATE INDEX idx__activity__is_successful__run_before ON activity(is_successful, ensured_fetched_until);
+CREATE INDEX IF NOT EXISTS idx__activity__run_at
+    ON activity(run_at);
+CREATE INDEX IF NOT EXISTS idx__activity__is_successful__run_before
+    ON activity(is_successful, ensured_fetched_until);
 
-CREATE TABLE thread (
+CREATE TABLE IF NOT EXISTS thread (
     id                      INTEGER,
     created_at              TIMESTAMP   NOT NULL,
     user_id                 TEXT        NOT NULL,
@@ -61,10 +63,12 @@ CREATE TABLE thread (
     PRIMARY KEY (id)
 );
 
-CREATE INDEX idx__thread_user_id ON thread(user_id);
-CREATE UNIQUE INDEX idx__thread__created_at__id ON thread(created_at, id);
+CREATE INDEX IF NOT EXISTS idx__thread_user_id
+    ON thread(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx__thread__created_at__id
+    ON thread(created_at, id);
 
-CREATE TABLE post (
+CREATE TABLE IF NOT EXISTS post (
     id                      INTEGER,
     -- +
     parent_thread_id        INTEGER     NOT NULL,
@@ -85,24 +89,42 @@ CREATE TABLE post (
     FOREIGN KEY (parent_thread_id) REFERENCES thread(id)
 );
 
-CREATE UNIQUE INDEX idx__post__parent_thread_id__id ON post(parent_thread_id, id);
-CREATE UNIQUE INDEX idx__post__parent_thread_id__created_at__id ON post(parent_thread_id, created_at, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx__post__parent_thread_id__id
+    ON post(parent_thread_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx__post__parent_thread_id__created_at__id
+    ON post(parent_thread_id, created_at, id);
 
-CREATE TABLE publishing_trace (
+CREATE TABLE IF NOT EXISTS publishing_trace (
     id      INTEGER,
     -- 所发报告的日期，而非发送时的日期
     `date`  DATE    UNIQUE,
+    type    TEXT    NOT NULL    CHECK (type IN ('trend', 'new_threads')),
     uuid    TEXT    UNIQUE,
 
     attempts    NOT NULL    DEFAULT 0,
 
-    -- 是否已请求服务器发串
-    has_made_reply_request  BOOLEAN NOT NULL DEFAULT FALSE,
     to_thread_id            INTEGER,
+
+    PRIMARY KEY (id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx__publishing_trace__date_type
+    ON publishing_trace(`date`, type);
+
+CREATE TABLE IF NOT EXISTS published_post (
+    id          INTEGER,
+    trace_id    INTEGER NOT NULL,
+    -- 指的是报告的第几页，不是在第几页
+    page_number INTEGER NOT NULL,
+
     -- 如果找到所发的串则不为空
     reply_post_id           INTEGER,
     -- 所发的串是第几个回应
     reply_offset            INTEGER,
 
-    PRIMARY KEY (id)
-)
+    PRIMARY KEY (id),
+    FOREIGN KEY (trace_id) REFERENCES publishing_trace(id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx__published_post__trace_id_type_page_number
+    ON published_post(trace_id, page_number);
