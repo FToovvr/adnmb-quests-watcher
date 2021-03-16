@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from .stat_modal import ThreadStats
+from .stat_model import ThreadStats
 
 super_huge_thread = ThreadStats(
     id=123456789,

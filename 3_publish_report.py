@@ -20,8 +20,12 @@ import anobbsclient
 from anobbsclient.walk import create_walker, ReversalThreadWalkTarget
 
 from commons import client, Trace, local_tz, ZWSP, OMITTING
-from commons.stat_modal import ThreadStats, Counts, Stats, DB
+from commons.stat_model import ThreadStats, Counts, Stats, DB
 from commons.debugging import super_huge_thread
+
+
+FORMAT_VERSION = '1.0'
+
 
 TREND_THREAD_ID = int(os.environ['ANOBBS_QUESTS_TREND_THREAD_ID'])
 DAILY_QST_THREAD_ID = int(os.environ['ANOBBS_QUESTS_DAILY_QST_THREAD_ID'])
@@ -55,7 +59,12 @@ META_MAIN_DIVIDER = f"{MAIN_DIVIDER_PART}　META　{MAIN_DIVIDER_PART}"
 
 DEBUGGING_SCENARIO = None  # 'preview'
 
-if DEBUGGING_SCENARIO.startswith('preview'):
+if DEBUGGING_SCENARIO is None:
+    DEBUG_JUST_PRINT_REPORT = False
+    DEBUG_NOTIFY_TO_TREND_THREAD = False
+    DEBUG_DONT_NOTIFY = False
+    DEBUG_DONT_CHECK_IF_SAGE = False
+elif DEBUGGING_SCENARIO.startswith('preview'):
     DEBUG_JUST_PRINT_REPORT = True
     DEBUG_NOTIFY_TO_TREND_THREAD = False
     DEBUG_DONT_NOTIFY = True
@@ -84,11 +93,7 @@ elif DEBUGGING_SCENARIO == 'check_sage':
     RANK_INCLUSION_METHOD = 'top_n'
     RANK_LIMIT = 1
 else:
-    assert(DEBUGGING_SCENARIO is None)
-    DEBUG_JUST_PRINT_REPORT = False
-    DEBUG_NOTIFY_TO_TREND_THREAD = False
-    DEBUG_DONT_NOTIFY = False
-    DEBUG_DONT_CHECK_IF_SAGE = False
+    assert(False)
 
 
 DEBUG_TARGET_DATE = None  # "2021-03-15"
@@ -319,6 +324,7 @@ class TrendReportTextGenerator:
     should_compare_with_last_day: bool
 
     threads: List[ThreadStats] = field(init=False)
+    counts: Counts = field(init=False)
 
     def __post_init__(self):
         object.__setattr__(self, 'threads',
@@ -488,21 +494,26 @@ class TrendReportTextGenerator:
             subhead_1 += [f"(参与饼干>0)"]
         subhead_lines += [' '.join(subhead_1)]
 
-        blue_text = thread.blue_text
-        if blue_text is not None:
-            if len(blue_text) > 8:
-                blue_text = blue_text[:8] + OMITTING
-            subhead_lines += [f"(蓝字：{blue_text})"]
+        if not self.db.is_thread_disappeared(thread.id):
+            blue_text = thread.blue_text
+            if blue_text is not None:
+                blue_text = blue_text.strip()
+                if len(blue_text) > 8:
+                    blue_text = blue_text[:8] + OMITTING
+                subhead_lines += [f"(蓝字：{blue_text})"]
+
+            preview = thread.generate_summary(free_lines=3)
+        else:
+            subhead_lines += ["(已消失)"]
+            preview = None
 
         return '\n'.join(
             [head]
             + list(map(lambda x: f'{ZWSP} ' * padding + x, subhead_lines))
-            + [
-                f">>No.{thread.id}",
-                thread.generate_summary(free_lines=3),
-                ZWSP.join([f"━━━━"]*4),
-                '',
-            ])
+            + [f">>No.{thread.id}"]
+            + ([preview] if preview is not None else [])
+            + [ZWSP.join([f"━━━━"]*4), '']
+        )
 
     def _generate_misc(self) -> Optional[str]:
         entries = list(filter(lambda x: x is not None, [
@@ -559,6 +570,7 @@ class TrendReportTextGenerator:
                 f"统计期间：共上传 {stats.total_bandwidth_usage[0]:,} 字节，"
                 + f"下载 {stats.total_bandwidth_usage[1]:,} 字节。", '',
             ]
+        lines += [f'Format Version = {FORMAT_VERSION}', '']
         lines += [f"Report ID = {self.uuid} # 定位用", '']
         return '\n'.join(lines)
 

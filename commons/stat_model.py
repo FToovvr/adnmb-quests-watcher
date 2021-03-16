@@ -147,13 +147,25 @@ class DB:
                 LEFT JOIN thread ON post.parent_thread_id = thread.id
                 WHERE post.created_at >= ?
                 GROUP BY parent_thread_id
+            ), revision_at_that_time AS (
+                WITH tmp AS (
+                    SELECT *, ROW_NUMBER() OVER (
+                        PARTITION BY id
+                        ORDER BY not_anymore_at_least_after ASC
+                    ) AS row_number
+                    FROM thread_old_revision
+                    WHERE not_anymore_at_least_after >= ?
+                )
+                SELECT id, title, name, content
+                FROM tmp
+                WHERE row_number = 1
             )
             SELECT
                 parent_thread_id,
                 thread.created_at,
-                thread.title,
-                thread.name,
-                thread.content,
+                CASE WHEN revision_at_that_time.id IS NULL THEN thread.title   ELSE revision_at_that_time.title   END,
+                CASE WHEN revision_at_that_time.id IS NULL THEN thread.name    ELSE revision_at_that_time.name    END,
+                CASE WHEN revision_at_that_time.id IS NULL THEN thread.content ELSE revision_at_that_time.content END,
                 count(post.id) AS increased_response_count,
                 thread.current_reply_count - COALESCE(later_changes.increased_response_count, 0),
                 SUM(CASE WHEN post.user_id = thread.user_id THEN 1 ELSE 0 END),
@@ -161,10 +173,11 @@ class DB:
             FROM post
             LEFT JOIN thread ON post.parent_thread_id = thread.id
             LEFT JOIN later_changes ON thread.id = later_changes.thread_id
-            WHERE post.created_at >= ? and post.created_at < ?
+            LEFT JOIN revision_at_that_time ON thread.id = revision_at_that_time.id
+            WHERE post.created_at >= ? AND post.created_at < ?
             GROUP BY parent_thread_id
             ORDER BY increased_response_count DESC
-        ''', (upper_bound.timestamp(), lower_bound.timestamp(), upper_bound.timestamp())).fetchall()
+        ''', (upper_bound.timestamp(), upper_bound.timestamp(), lower_bound.timestamp(), upper_bound.timestamp())).fetchall()
 
         threads: List[ThreadStats] = []
         for row in rows:
@@ -204,7 +217,7 @@ class DB:
                 SELECT id, content
                 FROM post
                 WHERE parent_thread_id = ?
-                    AND created_at >= ? and created_at < ?
+                    AND created_at >= ? AND created_at < ?
             )
             SELECT
                 a.id, current_reply_count - count(b.id)
@@ -231,7 +244,7 @@ class DB:
             IFNULL(sum(uploaded_bytes), 0), IFNULL(sum(downloaded_bytes), 0),
             IFNULL(sum(requested_board_page_count), 0), IFNULL(sum(requested_thread_page_count), 0)
         FROM activity
-        WHERE fetched_since >= ? and fetched_since < ?
+        WHERE fetched_since >= ? AND fetched_since < ?
         ''', (lower_bound.timestamp(), upper_bound.timestamp())).fetchone()
 
         return Stats((row[0], row[1]))
@@ -244,7 +257,7 @@ class DB:
                 WITH post_tail AS (
                     SELECT id % 10 AS tail_number
                     FROM post
-                    WHERE created_at >= ? and created_at < ?
+                    WHERE created_at >= ? AND created_at < ?
                         AND content LIKE 'r'
                 )
                 SELECT tail_number, count(tail_number) AS `count`
@@ -259,7 +272,7 @@ class DB:
 
         count = self.conn.execute(r'''
             SELECT count(id) FROM post
-            WHERE created_at >= ? and created_at < ?
+            WHERE created_at >= ? AND created_at < ?
                 AND content LIKE 'r'
         ''', (lower_bound.timestamp(), upper_bound.timestamp())).fetchone()[0]
 
@@ -283,7 +296,7 @@ class DB:
             WITH lucky_tail AS (
                 SELECT rx_nth_match("\d+?((\d)\2+)$", cast(id AS TEXT), 1) AS tail
                 FROM post
-                WHERE created_at >= ? and created_at < ?
+                WHERE created_at >= ? AND created_at < ?
                     AND rx_test("(\d)\1{" || ? || ",}$", cast(id AS TEXT))
                 ORDER BY id
             )
@@ -307,3 +320,11 @@ class DB:
         lower_bound = date.replace(hour=4, minute=0, second=0, microsecond=0)
         upper_bound = lower_bound + timedelta(days=1)
         return (lower_bound, upper_bound)
+
+    # 在 ``updating_model.DB`` 中重复存在
+    # TODO: 也许该来个 DBBase？
+    def is_thread_disappeared(self, thread_id: int) -> bool:
+        return (self.conn.execute(r'''
+            SELECT is_disappeared FROM thread_extra
+            WHERE id = ?
+        ''', (thread_id,)).fetchone() or [False])[0]

@@ -3,8 +3,9 @@
 from datetime import datetime, timedelta
 import os
 import subprocess
+import sqlite3
 
-from commons import local_tz
+from commons import local_tz, Trace
 
 LOG_FILE_PATH_FORMAT = 'logs/%Y-%m-%d'
 
@@ -12,7 +13,9 @@ LOG_FILE_PATH_FORMAT = 'logs/%Y-%m-%d'
 
 
 def main():
-    today = datetime.now(tz=local_tz)
+    now = datetime.now(tz=local_tz)
+    target_date = (now - timedelta(hours=4)).date() - timedelta(days=1)
+    today = now.date()
     yesterday = today - timedelta(days=1)
 
     # 如果不存在，创建今日的日志文件夹
@@ -28,6 +31,17 @@ def main():
 
     result = subprocess.run('./1_update_database.py')
     assert(result.returncode == 0)
+
+    with sqlite3.connect('db.sqlite3') as conn:
+        has_trace = Trace.has_trace(conn=conn, date=target_date)
+    if not has_trace:
+        result = subprocess.run([
+            './2.5_check_status_of_threads.py',
+            target_date.isoformat(),
+            '--board-id', '111',
+            '--db-path', './db.sqlite3',
+        ])
+        assert(result.returncode == 0)
 
     result = subprocess.run('./3_publish_report.py')
     assert(result.returncode == 0)

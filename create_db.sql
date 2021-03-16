@@ -75,9 +75,9 @@ CREATE TABLE IF NOT EXISTS thread_old_revision (
     not_anymore_at_least_after  INTEGER,
 
     content TEXT    NOT NULL,
-    name    TEXT    NOT NULL,
-    email   TEXT    NOT NULL,
-    title   TEXT    NOT NULL,
+    name    TEXT,
+    email   TEXT,
+    title   TEXT,
 
     -- 从实用角度出发，不可能有两次修改在同一秒
     PRIMARY KEY (id, not_anymore_at_least_after),
@@ -86,6 +86,18 @@ CREATE TABLE IF NOT EXISTS thread_old_revision (
 
 CREATE INDEX IF NOT EXISTS idx__thread_old_revision__not_anymore_at_least_after
     ON thread_old_revision (not_anymore_at_least_after);
+
+CREATE TABLE IF NOT EXISTS thread_extra (
+    id              INTEGER,
+    
+    -- 如果串消失了，则这里保留较早的时间；否则保留最新的时间
+    checked_at      INTEGER,
+
+    is_disappeared  BOOLEAN,
+
+    PRIMARY KEY (id),
+    FOREIGN KEY (id) REFERENCES thread (id)
+);
 
 CREATE TABLE IF NOT EXISTS post (
     id                      INTEGER,

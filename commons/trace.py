@@ -25,6 +25,13 @@ class Trace:
 
     _id: int = field(init=False)
 
+    @staticmethod
+    def has_trace(conn: sqlite3.Connection, date: date) -> bool:
+        return conn.execute(r'''
+            SELECT count(id) FROM publishing_trace
+            WHERE date = ?
+        ''', (date,)).fetchone()[0] != 0
+
     @property
     def iso_date(self) -> str:
         return self.date.strftime('%Y-%m-%d')
@@ -100,8 +107,13 @@ class Trace:
             SET to_thread_id = ?
             WHERE id = ?
         ''', (thread_id, self._id))
-        if len(self.reply_posts) != 0:
-            return
+
+        # 以防万一
+        self.conn.execute(r'''
+            DELETE FROM published_post
+            WHERE trace_id = ?
+        ''', (self._id,))
+
         for i in range(reply_count):
             page_number = i+1
             self.conn.execute(r'''
