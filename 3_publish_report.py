@@ -40,6 +40,9 @@ class Arugments:
     notify_thread: Optional[int]
     page_capacity: int
     including: including
+    no_compare: bool
+
+    db_path: Path
 
     force_slience: bool
     force_no_publish: bool
@@ -100,6 +103,11 @@ def parse_args(args: List[str]) -> Arugments:
         '--including', type=str, nargs='+', default=['not_below_q3'],
         dest='including',
         help="主题串包含进报告的条件",
+    )
+    parser.add_argument(
+        '--no-compare', action='store_true',
+        dest='no_compare',
+        help="报告不要包含与之前的数据的比较",
     )
     parser.add_argument(
         '--db-path', type=str, default='db.sqlite3',
@@ -181,6 +189,9 @@ def parse_args(args: List[str]) -> Arugments:
         notify_thread=parsed.notify_thread,
         page_capacity=parsed.page_capacity,
         including=parsed.including,
+        no_compare=parsed.no_compare,
+
+        db_path=parsed.db_path,
 
         force_slience=force_slience,
         force_no_publish=force_no_publish,
@@ -216,7 +227,7 @@ def main():
     args = parse_args(sys.argv[1:])
 
     if args.needs_to_track:
-        trace = Trace(conn=sqlite3.connect('db.sqlite3'),
+        trace = Trace(conn=sqlite3.connect(args.db_path),
                       date=args.target_date, type_='trend')
         attempts = trace.attempts
         if trace.is_done or attempts > 3:
@@ -240,7 +251,10 @@ def main():
         uuid = None
 
     pages = retrieve_data_then_generate_trend_report_text(
-        args.target_date, uuid, args.including)
+        date=args.target_date, uuid=uuid,
+        rank_inclusion_method=args.including,
+        should_compare_with_last_day=not args.no_compare,
+    )
 
     if not args.needs_to_track:
         if args.force_slience:
@@ -403,7 +417,9 @@ def find_last_post_with_uuid(thread_id: int) -> Optional[Tuple[int, int, str, in
 
 
 def retrieve_data_then_generate_trend_report_text(date: datetime, uuid: str,
-                                                  rank_inclusion_method: Including) -> Tuple[str, str, str]:
+                                                  rank_inclusion_method: Including,
+                                                  should_compare_with_last_day: bool,
+                                                  ) -> Tuple[str, str, str]:
     with sqlite3.connect('file:db.sqlite3?mode=ro', uri=True) as conn:
         db = DB(conn=conn)
         return TrendReportTextGenerator(
@@ -412,7 +428,7 @@ def retrieve_data_then_generate_trend_report_text(date: datetime, uuid: str,
             rank_inclusion_method=rank_inclusion_method,
             rank_page_capacity=RANK_PAGE_CAPACITY,
             uuid=uuid,
-            should_compare_with_last_day=True,  # TODO: 同上
+            should_compare_with_last_day=should_compare_with_last_day,
         ).generate()
 
 
