@@ -5,7 +5,7 @@ import os
 import subprocess
 import sqlite3
 
-from commons import local_tz, Trace
+from commons import local_tz, Trace, get_target_date
 
 LOG_FILE_PATH_FORMAT = 'logs/%Y-%m-%d'
 
@@ -14,7 +14,7 @@ LOG_FILE_PATH_FORMAT = 'logs/%Y-%m-%d'
 
 def main():
     now = datetime.now(tz=local_tz)
-    target_date = (now - timedelta(hours=4)).date() - timedelta(days=1)
+    target_date = get_target_date(now)
     today = now.date()
     yesterday = today - timedelta(days=1)
 
@@ -34,6 +34,9 @@ def main():
 
     with sqlite3.connect('db.sqlite3') as conn:
         has_trace = Trace.has_trace(conn=conn, date=target_date)
+        is_publication_done = Trace.is_publication_done(conn=conn, date=target_date,
+                                                        type_='trend')
+
     if not has_trace:
         result = subprocess.run([
             './2.5_check_status_of_threads.py',
@@ -43,8 +46,17 @@ def main():
         ])
         assert(result.returncode == 0)
 
-    result = subprocess.run('./3_publish_report.py')
-    assert(result.returncode == 0)
+    if not is_publication_done:
+        result = subprocess.run([
+            './3_publish_report.py', target_date.isoformat(),
+            '--publish-on-thread', os.environ['ANOBBS_QUESTS_TREND_THREAD_ID'],
+            '--check-sage',
+            '--notify-thread', os.environ['ANOBBS_QUESTS_DAILY_QST_THREAD_ID'],
+            '--page-capacity', '20',
+            '--including', 'not_below_q3',
+            '--db-path', 'db.sqlite3',
+        ])
+        assert(result.returncode == 0)
 
 
 if __name__ == '__main__':

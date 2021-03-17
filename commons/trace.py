@@ -32,6 +32,18 @@ class Trace:
             WHERE date = ?
         ''', (date,)).fetchone()[0] != 0
 
+    @staticmethod
+    def is_publication_done(conn: sqlite3.Connection, date: date, type_: str) -> bool:
+        if not Trace.has_trace(conn=conn, date=date):
+            return False
+
+        (c_record, c_done) = conn.execute(r'''
+            SELECT count(published_post.id), count(reply_post_id) FROM published_post
+            LEFT JOIN publishing_trace ON published_post.trace_id = publishing_trace.id
+            WHERE date = ? AND type = ?
+        ''', (date, type_)).fetchone()
+        return c_record != 0 and c_done == c_record
+
     @property
     def iso_date(self) -> str:
         return self.date.strftime('%Y-%m-%d')

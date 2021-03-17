@@ -5,6 +5,7 @@ import sqlite3
 import logging
 from datetime import datetime, timedelta
 import json
+import traceback
 
 import anobbsclient
 

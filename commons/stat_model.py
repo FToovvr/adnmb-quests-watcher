@@ -1,7 +1,7 @@
 from typing import Optional, Union, Tuple, List, Dict, OrderedDict
 from dataclasses import dataclass
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import sqlite3
 import re
 import statistics
@@ -316,8 +316,9 @@ class DB:
 
         return rows.fetchall()
 
-    def _get_boundaries(self, date: datetime) -> Tuple[datetime, datetime]:
-        lower_bound = date.replace(hour=4, minute=0, second=0, microsecond=0)
+    def _get_boundaries(self, date: date) -> Tuple[datetime, datetime]:
+        lower_bound = datetime.fromisoformat(
+            f"{date.isoformat()} 04:00:00").replace(tzinfo=local_tz)
         upper_bound = lower_bound + timedelta(days=1)
         return (lower_bound, upper_bound)
 

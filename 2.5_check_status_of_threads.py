@@ -14,19 +14,21 @@ import sqlite3
 import anobbsclient
 from anobbsclient.walk import create_walker, BoardWalkTarget
 
-from commons import local_tz, client
+from commons import local_tz, client, get_target_date
 from commons.updating_model import DB
 
 logging.config.fileConfig('logging.2.5_check_status_of_threads.conf')
 
 
-def parse_args(args: List[str]):
-    parser = argparse.ArgumentParser()
+def parse_args(args: List[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="检查截止到指定位置活动过的主题串是否仍然存在。"
+    )
 
     parser.add_argument(
         'since', type=str, nargs='?',
         help='\n'.join([
-            "检查截止到的日期或日期+时间，格式为 RFC 3339。",
+            "截止到的日期或日期+时间，格式为 RFC 3339。",
             "省缺则为四个小时前的前一天的上午4时",
         ]),
     )
@@ -42,8 +44,7 @@ def parse_args(args: List[str]):
     parsed = parser.parse_args(args)
 
     if parsed.since is None:
-        parsed.since = ((datetime.now(tz=local_tz) - timedelta(hours=4)).date()
-                        - timedelta(days=1)).isoformat()
+        parsed.since = get_target_date().isoformat()
     parsed.since = parsed.since.strip()
     if 'T' in parsed.since or ' ' in parsed.since:
         parsed.since = datetime.fromisoformat(

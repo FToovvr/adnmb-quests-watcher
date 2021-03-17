@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 
 from __future__ import annotations
-from typing import Tuple, List, Dict, OrderedDict, Optional, Union
+from typing import Any, Tuple, List, Dict, OrderedDict, Optional, Union
 from dataclasses import dataclass, field
 
+import argparse
+from pathlib import Path
+import sys
 import os
 import sqlite3
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, time, date
 import logging
 import logging.config
 import traceback
@@ -19,34 +22,184 @@ from bs4 import BeautifulSoup
 import anobbsclient
 from anobbsclient.walk import create_walker, ReversalThreadWalkTarget
 
-from commons import client, Trace, local_tz, ZWSP, OMITTING
+from commons import client, Trace, local_tz, ZWSP, OMITTING, get_target_date
 from commons.stat_model import ThreadStats, Counts, Stats, DB
 from commons.debugging import super_huge_thread
 
 
 FORMAT_VERSION = '1.0'
 
-
-TREND_THREAD_ID = int(os.environ['ANOBBS_QUESTS_TREND_THREAD_ID'])
 DAILY_QST_THREAD_ID = int(os.environ['ANOBBS_QUESTS_DAILY_QST_THREAD_ID'])
 
 
-RANK_INCLUSION_METHOD = 'q3'
-RANK_LIMIT = 20
-RANK_MIN_INCREASED_REPLY_COUNT = 20
+@dataclass(frozen=True)
+class Arugments:
+    target_date: date
+    publish_on_thread: Optional[int]
+    check_sage: bool
+    notify_thread: Optional[int]
+    page_capacity: int
+    including: including
+
+    force_slience: bool
+    force_no_publish: bool
+
+    @property
+    def needs_to_track(self) -> bool:
+        return self.publish_on_thread is not None \
+            and not self.force_no_publish
+
+
+@dataclass(frozen=True)
+class Including:
+    method: str
+    arguments: List[Any]
+
+    def __str__(self) -> str:
+        if self.method == 'top':
+            return f"前 {self.arguments[0]} 位"
+        elif self.method == 'not_below_q3':
+            return "前 25%"
+        elif self.method == 'count_at_least':
+            return f"新增回应≥{self.arguments[0]}"
+        else:
+            assert(False)
+
+
+def parse_args(args: List[str]) -> Arugments:
+    parser = argparse.ArgumentParser(
+        description="发布报告。"
+    )
+
+    parser.add_argument(
+        type=date.fromisoformat, nargs='?',
+        dest='target_date',
+        help="要报告的日期",
+    )
+    parser.add_argument(
+        '--publish-on-thread', type=int, default=None,
+        dest='publish_on_thread',
+        help="要发布到的串",
+    )
+    parser.add_argument(
+        '--check-sage', action='store_true',
+        dest='check_sage',
+        help="是否在发布前检查串有无被下沉",
+    )
+    parser.add_argument(
+        '--notify-thread', type=int, default=None,
+        dest='notify_thread',
+        help="成功发布后要通知的串",
+    )
+    parser.add_argument(
+        '--page-capacity', type=int, default=20,
+        dest='page_capacity',
+        help="每页最大能容纳主题串的数量",
+    )
+    parser.add_argument(
+        '--including', type=str, nargs='+', default=['not_below_q3'],
+        dest='including',
+        help="主题串包含进报告的条件",
+    )
+    parser.add_argument(
+        '--db-path', type=str, default='db.sqlite3',
+        dest='db_path',
+        help="DB 所在的路径",
+    )
+    parser.add_argument(
+        '--debugging-scenario', '-D', type=str, default=None,
+        choices=['none', 'preview', 'preview-',
+                 'publish_only', 'notify', 'notify-', 'check_sage'],
+        dest='debugging_scenario',
+        help="除错用。根据所输入的值，可能会修改其他参数的内容",
+    )
+
+    parsed = parser.parse_args(args)
+
+    if parsed.target_date is None:
+        parsed.target_date = get_target_date()
+
+    if parsed.check_sage or parsed.notify_thread is not None:
+        assert(parsed.publish_on_thread is not None)
+
+    if parsed.including[0] == 'not_below_q3':
+        assert(len(parsed.including) == 1)
+        parsed.including = Including('not_below_q3', [])
+    elif parsed.including[0] == 'top':
+        assert(len(parsed.including) <= 2)
+        if len(parsed.including) == 1:
+            parsed.including = Including('top', [32])
+        else:
+            parsed.including = Including('top', [int(parsed.including[1])])
+    elif parsed.including[0] == 'count_at_least':
+        assert(len(parsed.including) <= 2)
+        if len(parsed.including) == 1:
+            parsed.including = Including('count_at_least', [20])
+        else:
+            parsed.including = Including(
+                'count_at_least', [int(parsed.including[1])])
+    else:
+        assert(False)
+
+    parsed.db_path = Path(parsed.db_path)
+    if not parsed.db_path.exists():
+        print(f"{args.db_path} 不存在，将终止")
+        exit(1)
+
+    force_slience = False
+    force_no_publish = False
+    s = parsed.debugging_scenario or 'none'
+    if s.startswith('preview'):
+        # 只预览产生的报告
+        parsed.publish_on_thread = None
+        parsed.check_sage = False
+    elif s.startswith('check_sage'):
+        # 只执行检查是否下沉
+        assert(parsed.publish_on_thread is not None)
+        parsed.check_sage = True
+        force_slience = True
+        force_no_publish = True
+    elif s.startswith('publish_only'):
+        # 只发布报告
+        assert(parsed.publish_on_thread is not None)
+        parsed.notify_thread = None
+        parsed.check_sage = False
+    elif s.startswith('notify'):
+        # 发布通知，但是会通知到与报告相同的串内
+        assert(parsed.publish_on_thread is not None)
+        parsed.notify_thread = parsed.publish_on_thread
+        parsed.check_sage = False
+    else:
+        assert(s == 'none')
+    if s.endswith('-'):
+        parsed.including = Including('top', [1])
+
+    args_obj = Arugments(
+        target_date=parsed.target_date,
+        publish_on_thread=parsed.publish_on_thread,
+        check_sage=parsed.check_sage,
+        notify_thread=parsed.notify_thread,
+        page_capacity=parsed.page_capacity,
+        including=parsed.including,
+
+        force_slience=force_slience,
+        force_no_publish=force_no_publish,
+    )
+
+    return args_obj
 
 
 # 收录条件
-def RANK_INCLUDING(thread: ThreadStats, method: str,
+def RANK_INCLUDING(thread: ThreadStats, including: Including,
                    threads: List[ThreadStats], counts: Counts,):
-    if method == 'top_n':
-        nth_thread = threads[RANK_LIMIT - 1] \
-            if len(threads) >= RANK_LIMIT else threads[-1]
+    if including.method == 'top':
+        nth_thread = threads[including.arguments[0] - 1] \
+            if len(threads) >= including.arguments[0] else threads[-1]
         return thread.increased_response_count >= nth_thread.increased_response_count
-    elif method == 'q3':
+    elif including.method == 'not_below_q3':
         return thread.increased_response_count >= counts.thread_new_post_quartiles[2]
-    elif method == 'increased_replies':
-        return thread.increased_response_count >= RANK_MIN_INCREASED_REPLY_COUNT
+    elif including.method == 'count_at_least':
+        return thread.increased_response_count >= including.arguments[0]
     else:
         assert(False)
 
@@ -57,62 +210,14 @@ RANK_PAGE_CAPACITY = 20
 MAIN_DIVIDER_PART = f"══{ZWSP}══{ZWSP}══"
 META_MAIN_DIVIDER = f"{MAIN_DIVIDER_PART}　META　{MAIN_DIVIDER_PART}"
 
-DEBUGGING_SCENARIO = None  # 'preview'
-
-if DEBUGGING_SCENARIO is None:
-    DEBUG_JUST_PRINT_REPORT = False
-    DEBUG_NOTIFY_TO_TREND_THREAD = False
-    DEBUG_DONT_NOTIFY = False
-    DEBUG_DONT_CHECK_IF_SAGE = False
-elif DEBUGGING_SCENARIO.startswith('preview'):
-    DEBUG_JUST_PRINT_REPORT = True
-    DEBUG_NOTIFY_TO_TREND_THREAD = False
-    DEBUG_DONT_NOTIFY = True
-    DEBUG_DONT_CHECK_IF_SAGE = True
-    if DEBUGGING_SCENARIO.endswith('-'):
-        RANK_INCLUSION_METHOD = 'top_n'
-        RANK_LIMIT = 1
-elif DEBUGGING_SCENARIO == 'publish_only':
-    DEBUG_JUST_PRINT_REPORT = False
-    DEBUG_NOTIFY_TO_TREND_THREAD = False
-    DEBUG_DONT_NOTIFY = True
-    DEBUG_DONT_CHECK_IF_SAGE = False
-elif DEBUGGING_SCENARIO.startswith('notify'):
-    DEBUG_JUST_PRINT_REPORT = False
-    DEBUG_NOTIFY_TO_TREND_THREAD = True
-    DEBUG_DONT_NOTIFY = False
-    DEBUG_DONT_CHECK_IF_SAGE = True
-    if DEBUGGING_SCENARIO.endswith('-'):
-        RANK_INCLUSION_METHOD = 'top_n'
-        RANK_LIMIT = 1
-elif DEBUGGING_SCENARIO == 'check_sage':
-    DEBUG_JUST_PRINT_REPORT = True
-    DEBUG_NOTIFY_TO_TREND_THREAD = False
-    DEBUG_DONT_NOTIFY = True
-    DEBUG_DONT_CHECK_IF_SAGE = False
-    RANK_INCLUSION_METHOD = 'top_n'
-    RANK_LIMIT = 1
-else:
-    assert(False)
-
-
-DEBUG_TARGET_DATE = None  # "2021-03-15"
-
 
 def main():
 
-    if DEBUG_TARGET_DATE is None:
-        now = datetime.now(tz=local_tz)
-        if now.time() < time(hour=4):
-            now -= timedelta(hours=5)
-        target_date = now - timedelta(days=1)
-    else:
-        target_date = datetime.fromisoformat(
-            DEBUG_TARGET_DATE).replace(tzinfo=local_tz)
+    args = parse_args(sys.argv[1:])
 
-    if not DEBUG_JUST_PRINT_REPORT:
+    if args.needs_to_track:
         trace = Trace(conn=sqlite3.connect('db.sqlite3'),
-                      date=target_date.date(), type_='trend')
+                      date=args.target_date, type_='trend')
         attempts = trace.attempts
         if trace.is_done or attempts > 3:
             return
@@ -122,20 +227,24 @@ def main():
 
         logging.info(f"开始进行发布报告相关流程。UUID={trace.uuid}")
 
-    if not DEBUG_DONT_CHECK_IF_SAGE:
-        (trend_thread, _) = client.get_thread_page(TREND_THREAD_ID, page=1)
+    if args.check_sage:
+        (trend_thread, _) = client.get_thread_page(
+            args.publish_on_thread, page=1)
         if trend_thread.marked_sage:
             logging.warn("趋势串已下沉。本次终止")
 
-    if not DEBUG_JUST_PRINT_REPORT:
+    if args.needs_to_track:
         logging.info("尚未发送回应请求以发布报告，将生成报告文本并尝试发送回应请求")
         uuid = trace.uuid
     else:
         uuid = None
 
-    pages = retrieve_data_then_generate_trend_report_text(target_date, uuid)
+    pages = retrieve_data_then_generate_trend_report_text(
+        args.target_date, uuid, args.including)
 
-    if DEBUG_JUST_PRINT_REPORT:
+    if not args.needs_to_track:
+        if args.force_slience:
+            return
         for (title, name, content) in pages:
             print('\n'.join([
                 "标题：" + title,
@@ -147,7 +256,7 @@ def main():
     logging.info(f"报告文本页数：{len(pages)}")
 
     trace.report_thread_id_and_reply_count(
-        thread_id=TREND_THREAD_ID,
+        thread_id=args.publish_on_thread,
         reply_count=len(pages)
     )
     first_rount = True
@@ -166,7 +275,7 @@ def main():
         (title, name, content) = pages[post.report_page_number-1]
 
         try:
-            client.reply_thread(content, to_thread_id=TREND_THREAD_ID,
+            client.reply_thread(content, to_thread_id=args.publish_on_thread,
                                 title=title, name=name)
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
             logging.warning("请求服务器超时，将尝试检查是否成功发串")
@@ -184,7 +293,7 @@ def main():
 
         logging.info(f"将查找属于本页报告的回应")
 
-        found_post = find_last_post_with_uuid(TREND_THREAD_ID)
+        found_post = find_last_post_with_uuid(args.publish_on_thread)
         if found_post is None:
             logging.error("未找到任何带有 UUID 回应，本次终止")
             exit(1)
@@ -207,17 +316,14 @@ def main():
 
     logging.info("已发送各页报告且找到报告各页对应的各回应")
 
-    if not DEBUG_DONT_NOTIFY:
+    if args.notify_thread is not None:
         # TODO: 检查成功与否
-        # TODO: 开关决定是否通知
-        notify_to_thread_id = DAILY_QST_THREAD_ID
-        if DEBUG_NOTIFY_TO_TREND_THREAD:
-            notify_to_thread_id = TREND_THREAD_ID
+        notify_to_thread_id = args.notify_thread
         logging.info(f"将发送报告出炉通知。由于发串间隔限制，将等待30秒")
         sleep(30)
 
         posts = trace.reply_posts
-        content = target_date.strftime(
+        content = args.target_date.strftime(
             f"%Y年%-m月%-d日 跑团版 趋势日度报告：\n")
         content += '\n'.join(
             list(map(lambda x: f">>No.{x.reply_post_id}", posts))
@@ -233,7 +339,7 @@ def main():
         client.reply_thread(
             to_thread_id=notify_to_thread_id,
             title="本期跑团版趋势报告出炉",
-            name=target_date.strftime("%Y年%-m月%-d日 号"),
+            name=args.target_date.strftime("%Y年%-m月%-d日 号"),
             content=content,
         )
 
@@ -261,15 +367,14 @@ def find_last_post_with_uuid(thread_id: int) -> Optional[Tuple[int, int, str, in
     # TODO: 可以根据上一次回应所在位置预测一下，大部分情况能把请求减少到1次
     # TODO: 如果发现串 SAGE 了，以后就不发了，或者提前检查一下有无 SAGE？
 
-    (page_1, _) = client.get_thread_page(
-        id=TREND_THREAD_ID, page=1, for_analysis=1)
+    (page_1, _) = client.get_thread_page(id=thread_id, page=1, for_analysis=1)
     page_1: anobbsclient.ThreadPage = page_1
     # TODO: 其实这个可以在 API 那边定义 property 来算吧
     total_pages = (page_1.body.total_reply_count - 1) // 19 + 1
 
     walker = create_walker(
         target=ReversalThreadWalkTarget(
-            thread_id=TREND_THREAD_ID,
+            thread_id=thread_id,
             gatekeeper_post_id=None,
             start_page_number=total_pages,
         ),
@@ -297,15 +402,15 @@ def find_last_post_with_uuid(thread_id: int) -> Optional[Tuple[int, int, str, in
     return None
 
 
-def retrieve_data_then_generate_trend_report_text(date: datetime, uuid: str) -> Tuple[str, str, str]:
+def retrieve_data_then_generate_trend_report_text(date: datetime, uuid: str,
+                                                  rank_inclusion_method: Including) -> Tuple[str, str, str]:
     with sqlite3.connect('file:db.sqlite3?mode=ro', uri=True) as conn:
         db = DB(conn=conn)
         return TrendReportTextGenerator(
             db=db,
             date=date,
-            rank_inclusion_method=RANK_INCLUSION_METHOD,
+            rank_inclusion_method=rank_inclusion_method,
             rank_page_capacity=RANK_PAGE_CAPACITY,
-            rank_limit=RANK_LIMIT,  # TODO: 允许由命令行参数改变
             uuid=uuid,
             should_compare_with_last_day=True,  # TODO: 同上
         ).generate()
@@ -317,9 +422,8 @@ class TrendReportTextGenerator:
     db: DB
 
     date: datetime
-    rank_inclusion_method: str
+    rank_inclusion_method: Including
     rank_page_capacity: int
-    rank_limit: Optional[int]
     uuid: str
     should_compare_with_last_day: bool
 
@@ -363,15 +467,7 @@ class TrendReportTextGenerator:
             if daily_qst_reference is not None:
                 content += daily_qst_reference + '\n'
             content += self._generate_summary() + '\n'
-            content += "收录范围："
-            if self.rank_inclusion_method == 'top_n':
-                content += f"前 {self.rank_limit} 位"
-            elif self.rank_inclusion_method == 'q3':
-                content += "前 25%"
-            elif self.rank_inclusion_method == 'increased_replies':
-                content += f"新增回应≥{RANK_MIN_INCREASED_REPLY_COUNT}"
-            else:
-                assert(False)
+            content += "收录范围：" + str(self.rank_inclusion_method)
             content += '\n\n'
 
         content += '\n'.join([self._format_heading("趋势"), '', ''])
