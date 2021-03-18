@@ -110,7 +110,7 @@ class DB:
 
         last_activity_fetched_until = self.conn.execute(r'''
             SELECT ensured_fetched_until FROM activity 
-            WHERE is_successful = true AND ensured_fetched_until IS NOT NULL
+            WHERE is_successful = TRUE AND ensured_fetched_until IS NOT NULL
             ORDER BY ensured_fetched_until DESC LIMIT 1
             ''').fetchone()[0]
         return datetime.fromtimestamp(last_activity_fetched_until).replace(tzinfo=local_tz)

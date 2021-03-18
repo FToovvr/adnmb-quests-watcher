@@ -15,7 +15,7 @@ import anobbsclient
 from anobbsclient.walk import create_walker, BoardWalkTarget
 
 from commons import local_tz, client, get_target_date
-from commons.updating_model import DB
+from commons.updating_model import DB, Stats
 
 logging.config.fileConfig('logging.2.5_check_status_of_threads.conf')
 
@@ -64,7 +64,10 @@ def main():
         exit(1)
 
     with sqlite3.connect(args.db_path) as conn:
+
         db = DB(conn=conn)
+
+        stats = Stats()
 
         seen_thread_ids = set(db.get_thread_ids_seen_after(args.since))
 
@@ -77,10 +80,13 @@ def main():
             client=client,
         )
 
+        exception = None
         try:
-            for (_, page, _) in walker:
+            for (_, page, usage) in walker:
                 page: List[anobbsclient.BoardThread] = page
                 now = datetime.now(tz=local_tz)
+                stats.board_request_count += 1
+                stats.total_bandwidth_usage.add(usage)
 
                 for thread in page:
                     seen_thread_ids.discard(thread.id)
@@ -96,9 +102,15 @@ def main():
 
         except Exception as e:
             logging.critical(traceback.format_exc())
-            raise e
+            exception = e
 
-    logging.info("Done")
+        finally:
+            db.report_end(exception, stats)
+
+    if exception is not None:
+        raise exception
+    else:
+        logging.info("成功结束")
 
 
 if __name__ == '__main__':

@@ -44,8 +44,8 @@ def main():
         except Exception as e:
             logging.critical(traceback.format_exc())
             exception = e
-
-        db.report_end(exception, stats)
+        finally:
+            db.report_end(exception, stats)
 
     if exception is not None:
         raise exception
