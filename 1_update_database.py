@@ -37,20 +37,23 @@ def main():
 
         fetching_since = db.should_fetch_since
 
-        exception = None
+        is_successful = False
+        message = None
         try:
             fetch_board(db, fetching_since=fetching_since,
                         stats=stats)
-        except Exception as e:
-            logging.critical(traceback.format_exc())
-            exception = e
+            is_successful = True
+        except:
+            exc_text = traceback.format_exc()
+            logging.critical(exc_text)
+            message = exc_text
         finally:
-            db.report_end(exception, stats)
+            db.report_end(is_successful, message, stats)
 
-    if exception is not None:
-        raise exception
-    else:
+    if is_successful:
         logging.info("成功结束")
+    else:
+        exit(1)
 
 
 def fetch_board(db: DB, fetching_since: datetime, stats: Stats):

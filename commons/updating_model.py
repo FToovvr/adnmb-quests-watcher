@@ -268,16 +268,7 @@ class DB:
             return None
         return json.dumps(post_raw)
 
-    def report_end(self, exception: Exception, stats: Stats):
-        if exception is not None:
-            is_successful = False
-            try:
-                raise exception
-            except Exception:
-                message = traceback.format_exc()
-        else:
-            is_successful = True
-            message = None
+    def report_end(self, is_successful: bool, message: Optional[str], stats: Stats):
         total_usage = stats.total_bandwidth_usage.total
 
         self.logger.info(

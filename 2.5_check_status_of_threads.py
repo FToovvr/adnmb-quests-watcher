@@ -80,7 +80,8 @@ def main():
             client=client,
         )
 
-        exception = None
+        is_successful = False
+        message = None
         try:
             for (_, page, usage) in walker:
                 page: List[anobbsclient.BoardThread] = page
@@ -100,17 +101,20 @@ def main():
                     db.report_is_thread_disappeared(
                         not_found_thread_id, now, True)
 
-        except Exception as e:
-            logging.critical(traceback.format_exc())
-            exception = e
+            is_successful = True
+
+        except:
+            exc_text = traceback.format_exc()
+            logging.critical(exc_text)
+            message = exc_text
 
         finally:
-            db.report_end(exception, stats)
+            db.report_end(is_successful, message, stats)
 
-    if exception is not None:
-        raise exception
-    else:
+    if is_successful:
         logging.info("成功结束")
+    else:
+        exit(1)
 
 
 if __name__ == '__main__':
