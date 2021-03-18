@@ -22,14 +22,16 @@ from bs4 import BeautifulSoup
 import anobbsclient
 from anobbsclient.walk import create_walker, ReversalThreadWalkTarget
 
-from commons import client, Trace, local_tz, ZWSP, OMITTING, get_target_date
+from commons import get_client, Trace, local_tz, ZWSP, OMITTING, get_target_date
 from commons.stat_model import ThreadStats, Counts, Stats, DB
 from commons.debugging import super_huge_thread
 
 
 FORMAT_VERSION = '1.0'
 
-DAILY_QST_THREAD_ID = int(os.environ['ANOBBS_QUESTS_DAILY_QST_THREAD_ID'])
+DAILY_QST_THREAD_ID = int(os.environ.get(
+    'ANOBBS_QUESTS_DAILY_QST_THREAD_ID', -1))
+DAILY_QST_THREAD_ID = None if DAILY_QST_THREAD_ID is None else DAILY_QST_THREAD_ID
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,11 @@ class Arugments:
     def needs_to_track(self) -> bool:
         return self.publish_on_thread is not None \
             and not self.force_no_publish
+
+    @property
+    def requires_client(self) -> bool:
+        return self.publish_on_thread is not None \
+            or self.check_sage
 
 
 @dataclass(frozen=True)
@@ -226,6 +233,11 @@ def main():
 
     args = parse_args(sys.argv[1:])
 
+    if args.requires_client:
+        client = get_client()
+    else:
+        client = None
+
     if args.needs_to_track:
         trace = Trace(conn=sqlite3.connect(args.db_path),
                       date=args.target_date, type_='trend')
@@ -307,7 +319,7 @@ def main():
 
         logging.info(f"将查找属于本页报告的回应")
 
-        found_post = find_last_post_with_uuid(args.publish_on_thread)
+        found_post = find_last_post_with_uuid(client, args.publish_on_thread)
         if found_post is None:
             logging.error("未找到任何带有 UUID 回应，本次终止")
             exit(1)
@@ -360,7 +372,7 @@ def main():
     logging.info("成功结束")
 
 
-def find_last_post_with_uuid(thread_id: int) -> Optional[Tuple[int, int, str, int]]:
+def find_last_post_with_uuid(client: anobbsclient.Client, thread_id: int) -> Optional[Tuple[int, int, str, int]]:
     """
     Returns
     -------
@@ -512,6 +524,8 @@ class TrendReportTextGenerator:
         ])
 
     def _generate_daily_qst_reference(self) -> Optional[str]:
+        if DAILY_QST_THREAD_ID is None:
+            return None
         daily_qst = self.db.get_daily_qst(self.date, DAILY_QST_THREAD_ID)
         if daily_qst is None:
             return None

@@ -17,7 +17,7 @@ import anobbsclient
 from anobbsclient.walk import create_walker, BoardWalkTarget, ReversalThreadWalkTarget
 
 # pylint: disable=import-error
-from commons import client, local_tz
+from commons import get_client, local_tz
 from commons.updating_model import TotalBandwidthUsage, Stats, DB
 
 # 默认单线程
@@ -59,6 +59,8 @@ def main():
 def fetch_board(db: DB, fetching_since: datetime, stats: Stats):
 
     logger = logging.getLogger('FETCH')
+
+    client = get_client()
 
     walker = create_walker(
         target=BoardWalkTarget(

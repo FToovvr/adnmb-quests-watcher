@@ -1,3 +1,3 @@
 from .consts import *
-from .client import client
+from .client import get_client
 from .trace import Trace

@@ -14,7 +14,7 @@ import sqlite3
 import anobbsclient
 from anobbsclient.walk import create_walker, BoardWalkTarget
 
-from commons import local_tz, client, get_target_date
+from commons import local_tz, get_client, get_target_date
 from commons.updating_model import DB, Stats
 
 logging.config.fileConfig('logging.2.5_check_status_of_threads.conf')
@@ -62,6 +62,8 @@ def main():
     if not args.db_path.exists():
         logging.critical(f"{args.db_path} 不存在，将终止")
         exit(1)
+
+    client = get_client()
 
     with sqlite3.connect(args.db_path) as conn:
 
