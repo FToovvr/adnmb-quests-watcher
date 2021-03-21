@@ -53,7 +53,7 @@ def main():
             '--check-sage',
             '--notify-thread', os.environ['ANOBBS_QUESTS_DAILY_QST_THREAD_ID'],
             '--page-capacity', '20',
-            '--including', 'not_below_q3',
+            '--including', 'not_below_q2',
             '--db-path', 'db.sqlite3',
         ])
         assert(result.returncode == 0)

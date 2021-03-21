@@ -25,6 +25,8 @@ class ThreadStats:
     total_reply_count: int
     increased_response_count_by_po: int
     distinct_cookie_count: int
+    increased_text_bytes: int
+    increased_text_bytes_by_po: int
 
     @property
     def content(self) -> str:
@@ -166,10 +168,12 @@ class DB:
                 CASE WHEN revision_at_that_time.id IS NULL THEN thread.title   ELSE revision_at_that_time.title   END,
                 CASE WHEN revision_at_that_time.id IS NULL THEN thread.name    ELSE revision_at_that_time.name    END,
                 CASE WHEN revision_at_that_time.id IS NULL THEN thread.content ELSE revision_at_that_time.content END,
-                count(post.id) AS increased_response_count,
+                COUNT(post.id) AS increased_response_count,
                 thread.current_reply_count - COALESCE(later_changes.increased_response_count, 0),
                 SUM(CASE WHEN post.user_id = thread.user_id THEN 1 ELSE 0 END),
-                count(DISTINCT post.user_id)
+                COUNT(DISTINCT post.user_id),
+                SUM(length(post.content)) + (CASE WHEN thread.created_at >= ? AND post.created_at < ? THEN length(thread.content) ELSE 0 END),
+                SUM(CASE WHEN post.user_id = thread.user_id THEN length(post.content) ELSE 0 END) + (CASE WHEN thread.created_at >= ? AND post.created_at < ? THEN length(thread.content) ELSE 0 END)
             FROM post
             LEFT JOIN thread ON post.parent_thread_id = thread.id
             LEFT JOIN later_changes ON thread.id = later_changes.thread_id
@@ -177,7 +181,13 @@ class DB:
             WHERE post.created_at >= ? AND post.created_at < ?
             GROUP BY parent_thread_id
             ORDER BY increased_response_count DESC
-        ''', (upper_bound.timestamp(), upper_bound.timestamp(), lower_bound.timestamp(), upper_bound.timestamp())).fetchall()
+        ''', (
+            upper_bound.timestamp(),
+            upper_bound.timestamp(),
+            lower_bound.timestamp(), upper_bound.timestamp(),
+            lower_bound.timestamp(), upper_bound.timestamp(),
+            lower_bound.timestamp(), upper_bound.timestamp(),
+        )).fetchall()
 
         threads: List[ThreadStats] = []
         for row in rows:
@@ -193,6 +203,8 @@ class DB:
                 total_reply_count=row[6],
                 increased_response_count_by_po=row[7],
                 distinct_cookie_count=row[8],
+                increased_text_bytes=row[9],
+                increased_text_bytes_by_po=row[10],
             ))
 
         return threads

@@ -68,6 +68,8 @@ class Including:
     def __str__(self) -> str:
         if self.method == 'top':
             return f"前 {self.arguments[0]} 位"
+        elif self.method == 'not_below_q2':
+            return "前 50%"
         elif self.method == 'not_below_q3':
             return "前 25%"
         elif self.method == 'count_at_least':
@@ -137,9 +139,9 @@ def parse_args(args: List[str]) -> Arugments:
     if parsed.check_sage or parsed.notify_thread is not None:
         assert(parsed.publish_on_thread is not None)
 
-    if parsed.including[0] == 'not_below_q3':
+    if parsed.including[0] in ['not_below_q2', 'not_below_q3']:
         assert(len(parsed.including) == 1)
-        parsed.including = Including('not_below_q3', [])
+        parsed.including = Including(parsed.including[0], [])
     elif parsed.including[0] == 'top':
         assert(len(parsed.including) <= 2)
         if len(parsed.including) == 1:
@@ -214,6 +216,8 @@ def RANK_INCLUDING(thread: ThreadStats, including: Including,
         nth_thread = threads[including.arguments[0] - 1] \
             if len(threads) >= including.arguments[0] else threads[-1]
         return thread.increased_response_count >= nth_thread.increased_response_count
+    elif including.method == 'not_below_q2':
+        return thread.increased_response_count >= counts.thread_new_post_quartiles[1]
     elif including.method == 'not_below_q3':
         return thread.increased_response_count >= counts.thread_new_post_quartiles[2]
     elif including.method == 'count_at_least':

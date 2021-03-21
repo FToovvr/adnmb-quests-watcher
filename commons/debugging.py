@@ -12,4 +12,6 @@ super_huge_thread = ThreadStats(
     total_reply_count=1234567,
     increased_response_count_by_po=123456,
     distinct_cookie_count=654321,
+    increased_text_bytes=100000,
+    increased_text_bytes_by_po=100000,
 )
