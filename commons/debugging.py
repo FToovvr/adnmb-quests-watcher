@@ -14,4 +14,6 @@ super_huge_thread = ThreadStats(
     distinct_cookie_count=654321,
     increased_text_bytes=100000,
     increased_text_bytes_by_po=100000,
+    blue_text="撑爆" * 100,
+    has_new_blue_text=True,
 )

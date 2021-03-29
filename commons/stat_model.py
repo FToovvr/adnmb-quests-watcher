@@ -27,6 +27,8 @@ class ThreadStats:
     distinct_cookie_count: int
     increased_text_bytes: int
     increased_text_bytes_by_po: int
+    blue_text: Optional[str]
+    has_new_blue_text: bool
 
     @property
     def content(self) -> str:
@@ -66,22 +68,6 @@ class ThreadStats:
                 break
 
         return "\n".join(lines)
-
-    @property
-    def blue_text(self) -> Optional[str]:
-        soup = BeautifulSoup(self.raw_content, features='html.parser')
-
-        def find_fn(tag: Tag):
-            if tag.name == 'font':
-                return re.match(r'^\s*blue\s*$', tag.get('color', '')) is not None
-            if tag.name == 'span':
-                return re.match(r'^.*;?\s*color:\s*blue\s*;?.*$', tag.get('style', '')) is not None
-            return False
-
-        elems = soup.find_all(find_fn)
-        if len(elems) == 0:
-            return None
-        return elems[-1].get_text()
 
 
 @dataclass  # (frozen=True)
@@ -137,6 +123,22 @@ class DB:
             return None if r is None else r.group(nth)
         self.conn.create_function("rx_nth_match", 3, rx_nth_match)
 
+        def extract_blue_text(raw_content: str) -> Optional[str]:
+            soup = BeautifulSoup(raw_content, features='html.parser')
+
+            def find_fn(tag: Tag):
+                if tag.name == 'font':
+                    return re.match(r'^\s*blue\s*$', tag.get('color', '')) is not None
+                if tag.name == 'span':
+                    return re.match(r'^.*;?\s*color:\s*blue\s*;?.*$', tag.get('style', '')) is not None
+                return False
+
+            elems = soup.find_all(find_fn)
+            if len(elems) == 0:
+                return None
+            return elems[-1].get_text()
+        self.conn.create_function("extract_blue_text", 1, extract_blue_text)
+
     def get_daily_threads(self, date: datetime) -> List[ThreadStats]:
         lower_bound, upper_bound = self._get_boundaries(date)
 
@@ -173,7 +175,8 @@ class DB:
                 SUM(CASE WHEN post.user_id = thread.user_id THEN 1 ELSE 0 END),
                 COUNT(DISTINCT post.user_id),
                 SUM(length(post.content)) + (CASE WHEN thread.created_at >= ? AND post.created_at < ? THEN length(thread.content) ELSE 0 END),
-                SUM(CASE WHEN post.user_id = thread.user_id THEN length(post.content) ELSE 0 END) + (CASE WHEN thread.created_at >= ? AND post.created_at < ? THEN length(thread.content) ELSE 0 END)
+                SUM(CASE WHEN post.user_id = thread.user_id THEN length(post.content) ELSE 0 END) + (CASE WHEN thread.created_at >= ? AND post.created_at < ? THEN length(thread.content) ELSE 0 END),
+                extract_blue_text(CASE WHEN revision_at_that_time.id IS NULL THEN thread.content ELSE revision_at_that_time.content END)
             FROM post
             LEFT JOIN thread ON post.parent_thread_id = thread.id
             LEFT JOIN later_changes ON thread.id = later_changes.thread_id
@@ -192,10 +195,11 @@ class DB:
         threads: List[ThreadStats] = []
         for row in rows:
             created_at = datetime.fromtimestamp(row[1], tz=local_tz)
+            is_new = created_at >= lower_bound and created_at < upper_bound
             threads.append(ThreadStats(
                 id=row[0],
                 created_at=created_at,
-                is_new=created_at >= lower_bound and created_at < upper_bound,
+                is_new=is_new,
                 title=row[2],
                 name=row[3],
                 raw_content=row[4],
@@ -205,9 +209,43 @@ class DB:
                 distinct_cookie_count=row[8],
                 increased_text_bytes=row[9],
                 increased_text_bytes_by_po=row[10],
+                blue_text=row[11],
+                has_new_blue_text=self.__has_new_blue_text(
+                    date, row[0], is_new, row[11])
             ))
 
         return threads
+
+    # TODO: 优化
+    def __has_new_blue_text(self, date: datetime, thread_id: int, thread_is_new: bool, thread_blue_text: Optional[str]):
+        if not thread_blue_text:
+            return False
+        if thread_is_new:
+            return True
+
+        lower_bound, upper_bound = self._get_boundaries(date)
+
+        new_blue_texts = self.conn.execute('''
+            SELECT
+                extract_blue_text(thread_old_revision.content) AS blue_text,
+                not_anymore_at_least_after
+            FROM thread_old_revision
+            WHERE thread_old_revision.id = ? AND not_anymore_at_least_after < ?
+            ORDER BY not_anymore_at_least_after ASC
+        ''', (thread_id, upper_bound.timestamp())).fetchall()
+
+        # 懒得搞 SQL 了…
+
+        if len(new_blue_texts) == 0:
+            # 这个串的蓝字是在 watcher 运行前加的
+            return False
+
+        for [blue_text, not_anymore_at_least_after] in new_blue_texts:
+            if not_anymore_at_least_after >= lower_bound.timestamp():
+                # 除非是 watcher 开始运行那天，这里的 blue_text 是前一天时蓝字的状态
+                return blue_text != thread_blue_text
+
+        return False
 
     def get_daily_qst(self, date: datetime, daily_qst_thread_id: int) -> Optional[Tuple[int, int]]:
         """

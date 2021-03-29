@@ -619,12 +619,13 @@ class TrendReportTextGenerator:
             # # TODO: 应该更严谨些
             # if thread.created_at.day == self.date.day:
             #     head += "当日"
-            # else: 
+            # else:
             #     head += "次日"
             head += thread.created_at.strftime('%m-%d')
         else:
             head += thread.created_at.strftime('%Y-%m-%d')
-        head += (thread.created_at.strftime(' %H:%M') if thread.is_new else '') + "]"
+        head += (thread.created_at.strftime(' %H:%M')
+                 if thread.is_new else '') + "]"
 
         subhead_lines = []
 
@@ -643,7 +644,10 @@ class TrendReportTextGenerator:
                 blue_text = blue_text.strip()
                 if len(blue_text) > 8:
                     blue_text = blue_text[:8] + OMITTING
-                subhead_lines += [f"(蓝字：{blue_text})"]
+                if thread.has_new_blue_text:
+                    subhead_lines += [f"(新蓝字！「{blue_text}」)"]
+                else:
+                    subhead_lines += [f"(蓝字「{blue_text}」)"]
 
             preview = thread.generate_summary(free_lines=3)
         else:
