@@ -586,10 +586,16 @@ class TrendReportTextGenerator:
 
     def _generate_trending_boards(self, step: int) -> List[str]:
         included_threads = []
+        threads_with_new_blue_text = []
         for (i, thread) in enumerate(self.threads):
-            if not RANK_INCLUDING(thread, self.rank_inclusion_method, self.threads, self.counts):
-                break
-            included_threads.append(thread)
+            rank = i+1
+            if thread.has_new_blue_text:
+                threads_with_new_blue_text.append([rank, thread])
+            elif RANK_INCLUDING(thread, self.rank_inclusion_method, self.threads, self.counts):
+                included_threads.append([rank, thread])
+        threads_with_new_blue_text = sorted(threads_with_new_blue_text,
+                                            key=lambda x: x[1].created_at)
+        included_threads = threads_with_new_blue_text + included_threads
 
         boards = []
         for i in range(0, len(included_threads), step):
@@ -598,10 +604,9 @@ class TrendReportTextGenerator:
             boards.append(board)
         return boards
 
-    def _generate_trending_board(self, threads: List[ThreadStats], i_start: int) -> str:
+    def _generate_trending_board(self, threads: List[Tuple[int, ThreadStats]], i_start: int) -> str:
         lines = []
-        for (i, thread) in enumerate(threads):
-            rank = i_start + i + 1
+        for (i, [rank, thread]) in enumerate(threads):
             lines += [self.__generate_thread_entry(thread, rank)]
 
         return '\n'.join(lines)
