@@ -27,7 +27,7 @@ from commons.stat_model import ThreadStats, Counts, Stats, DB
 from commons.debugging import super_huge_thread
 
 
-FORMAT_VERSION = '1.0'
+FORMAT_VERSION = '2.0'
 
 DAILY_QST_THREAD_ID = int(os.environ.get(
     'ANOBBS_QUESTS_DAILY_QST_THREAD_ID', -1))
@@ -502,22 +502,26 @@ class TrendReportTextGenerator:
             content += "收录范围：" + str(self.rank_inclusion_method)
             content += '\n\n'
 
-        content += '\n'.join([self._format_heading("趋势"), '', ''])
+            content += '\n'.join([self._format_heading("　说明　"), '', ''])
+            content += "「+X/Y」：「X」代表「总增量」，「Y」代表「PO增量」。\n"
+            content += "\n"
+
+        content += '\n'.join([self._format_heading("　趋势　"), '', ''])
         content += trending_board + '\n'
 
         if page_number == 1:
             misc_content = self._generate_misc()
             if misc_content is not None:
-                content += '\n'.join([self._format_heading("杂项"), '', ''])
+                content += '\n'.join([self._format_heading("　杂项　"), '', ''])
                 content += misc_content + '\n'
 
-        content += '\n'.join([self._format_heading("META"), '', ''])
+        content += '\n'.join([self._format_heading("　META　"), '', ''])
         content += self._generate_meta(page_number) + '\n'
 
         return content
 
     def _format_heading(self, name) -> str:
-        return f"{MAIN_DIVIDER_PART}　{name}　{MAIN_DIVIDER_PART}"
+        return f"{MAIN_DIVIDER_PART}{name}{MAIN_DIVIDER_PART}"
 
     def _generate_head(self, page_number: int, total_page_number: int) -> str:
         return '\n'.join([
@@ -607,21 +611,30 @@ class TrendReportTextGenerator:
         head = f"#{rank}"
         padding = len(head) + 1
         if thread.is_new:
-            head += f" [+{thread.increased_response_count} 回应 NEW!]"
+            head += f" [+{thread.increased_response_count}/{thread.increased_response_count_by_po} 回应 NEW!]"
         else:
-            head += f" [+{thread.increased_response_count} ={thread.total_reply_count} 回应]"
-        head += f" [@{thread.created_at.strftime('%Y-%m-%d')}" \
-            + f"{ thread.created_at.strftime(' %H:%M') if thread.is_new else ''}]"
+            head += f" [+{thread.increased_response_count}/{thread.increased_response_count_by_po} ={thread.total_reply_count} 回应]"
+        head += f" [@"
+        if thread.is_new:
+            # # TODO: 应该更严谨些
+            # if thread.created_at.day == self.date.day:
+            #     head += "当日"
+            # else: 
+            #     head += "次日"
+            head += thread.created_at.strftime('%m-%d')
+        else:
+            head += thread.created_at.strftime('%Y-%m-%d')
+        head += (thread.created_at.strftime(' %H:%M') if thread.is_new else '') + "]"
 
         subhead_lines = []
 
         subhead_1 = []
-        subhead_1 += [f"(PO回应={thread.increased_response_count_by_po})"]
         approx_distinct_cookie_count = thread.distinct_cookie_count//5*5
         if approx_distinct_cookie_count != 0:
             subhead_1 += [f"(参与饼干≥{approx_distinct_cookie_count})"]
         else:
             subhead_1 += [f"(参与饼干>0)"]
+        subhead_1 += [f"(+{thread.increased_text_bytes/1024:.2f}KB/{thread.increased_text_bytes_by_po/1024:.2f}KB)"]
         subhead_lines += [' '.join(subhead_1)]
 
         if not self.db.is_thread_disappeared(thread.id):
