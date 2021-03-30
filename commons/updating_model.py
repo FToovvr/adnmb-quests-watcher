@@ -137,7 +137,7 @@ class DB:
             return None
         return row[0]
 
-    def record_thread(self, thread: anobbsclient.BoardThread, record_total_reply_count: bool = True):
+    def record_thread(self, thread: anobbsclient.ThreadPage, record_total_reply_count: bool = True):
         self.logger.info(f'正在记录/更新串信息。串号 = {thread.id}')
 
         # TODO: 是否考虑 sage？

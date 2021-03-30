@@ -125,6 +125,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx__post__parent_thread_id__id
 CREATE UNIQUE INDEX IF NOT EXISTS idx__post__parent_thread_id__created_at__id
     ON post(parent_thread_id, created_at, id);
 
+CREATE TABLE IF NOT EXISTS completion_registry_entry (
+    id                          INTEGER,
+    post_id                     INTEGER,
+
+    subject_thread_id           INTEGER, -- 由于有可能没见过，不作为外键了
+
+    has_blue_text_been_added    BOOLEAN DEFAULT FALSE,
+
+    PRIMARY KEY (id),
+    FOREIGN KEY (post_id) REFERENCES post(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx__completion_registry_entry__post_id
+    ON completion_registry_entry(post_id);
+CREATE INDEX IF NOT EXISTS idx__completion_registry_entry_has_blue_text_been_added_subject_thread_id
+    ON completion_registry_entry(has_blue_text_been_added, subject_thread_id);
+
 CREATE TABLE IF NOT EXISTS publishing_trace (
     id      INTEGER,
     -- 所发报告的日期，而非发送时的日期

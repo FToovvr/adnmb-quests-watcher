@@ -111,6 +111,22 @@ class DB:
 
     conn: sqlite3.Connection
 
+    @staticmethod
+    def extract_blue_text(raw_content: str) -> Optional[str]:
+        soup = BeautifulSoup(raw_content, features='html.parser')
+
+        def find_fn(tag: Tag):
+            if tag.name == 'font':
+                return re.match(r'^\s*blue\s*$', tag.get('color', '')) is not None
+            if tag.name == 'span':
+                return re.match(r'^.*;?\s*color:\s*blue\s*;?.*$', tag.get('style', '')) is not None
+            return False
+
+        elems = soup.find_all(find_fn)
+        if len(elems) == 0:
+            return None
+        return elems[-1].get_text()
+
     def __post_init__(self):
 
         # python 的 sqlite3 不支持 REGEXP
@@ -129,21 +145,7 @@ class DB:
             return len(text)
         self.conn.create_function("count_characters", 1, count_characters)
 
-        def extract_blue_text(raw_content: str) -> Optional[str]:
-            soup = BeautifulSoup(raw_content, features='html.parser')
-
-            def find_fn(tag: Tag):
-                if tag.name == 'font':
-                    return re.match(r'^\s*blue\s*$', tag.get('color', '')) is not None
-                if tag.name == 'span':
-                    return re.match(r'^.*;?\s*color:\s*blue\s*;?.*$', tag.get('style', '')) is not None
-                return False
-
-            elems = soup.find_all(find_fn)
-            if len(elems) == 0:
-                return None
-            return elems[-1].get_text()
-        self.conn.create_function("extract_blue_text", 1, extract_blue_text)
+        self.conn.create_function("extract_blue_text", 1, DB.extract_blue_text)
 
     def get_daily_threads(self, date: datetime) -> List[ThreadStats]:
         lower_bound, upper_bound = self._get_boundaries(date)
