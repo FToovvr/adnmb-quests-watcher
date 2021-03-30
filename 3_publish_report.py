@@ -28,6 +28,8 @@ from commons.debugging import super_huge_thread
 
 
 FORMAT_VERSION = '2.0'
+CHARACTER_COUNT_METHOD_VERSION = '2'
+CHARACTER_COUNT_METHOD_EXPLANATION = "除换行与一般空白外字符的个数"
 
 DAILY_QST_THREAD_ID = int(os.environ.get(
     'ANOBBS_QUESTS_DAILY_QST_THREAD_ID', -1))
@@ -503,8 +505,10 @@ class TrendReportTextGenerator:
             content += '\n\n'
 
             content += '\n'.join([self._format_heading("　说明　"), '', ''])
-            content += "「+X/Y」：「X」代表「总增量」，「Y」代表「PO增量」。\n"
-            content += "\n"
+            content += f"「+X/Y」：\n{ZWSP}  「X」代表总增量，「Y」代表PO增量。\n"
+            content += '\n'
+            content += f"文本统计方式：\n{ZWSP}  {CHARACTER_COUNT_METHOD_EXPLANATION}。\n"
+            content += '\n'
 
         content += '\n'.join([self._format_heading("　趋势　"), '', ''])
         content += trending_board + '\n'
@@ -640,7 +644,14 @@ class TrendReportTextGenerator:
             subhead_1 += [f"(参与饼干≥{approx_distinct_cookie_count})"]
         else:
             subhead_1 += [f"(参与饼干>0)"]
-        subhead_1 += [f"(+{thread.increased_text_bytes/1024:.2f}KB/{thread.increased_text_bytes_by_po/1024:.2f}KB)"]
+        character_count = "(+" + \
+            f"{thread.increased_character_count/1000:.2f}K" + "/"
+        if thread.increased_character_count_by_po != 0:
+            character_count += f"{thread.increased_character_count_by_po/1000:.2f}K"
+        else:
+            character_count += "0"
+        character_count += " 文本)"
+        subhead_1 += [character_count]
         subhead_lines += [' '.join(subhead_1)]
 
         if not self.db.is_thread_disappeared(thread.id):
@@ -722,6 +733,8 @@ class TrendReportTextGenerator:
                 f"统计期间：共上传 {stats.total_bandwidth_usage[0]:,} 字节，"
                 + f"下载 {stats.total_bandwidth_usage[1]:,} 字节。", '',
             ]
+        lines += [
+            f'文本统计方式 Version = {CHARACTER_COUNT_METHOD_VERSION} ', '']
         lines += [f'Format Version = {FORMAT_VERSION}', '']
         lines += [f"Report ID = {self.uuid} # 定位用", '']
         return '\n'.join(lines)

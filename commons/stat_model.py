@@ -25,8 +25,8 @@ class ThreadStats:
     total_reply_count: int
     increased_response_count_by_po: int
     distinct_cookie_count: int
-    increased_text_bytes: int
-    increased_text_bytes_by_po: int
+    increased_character_count: int
+    increased_character_count_by_po: int
     blue_text: Optional[str]
     has_new_blue_text: bool
 
@@ -123,6 +123,12 @@ class DB:
             return None if r is None else r.group(nth)
         self.conn.create_function("rx_nth_match", 3, rx_nth_match)
 
+        def count_characters(raw_content: str) -> int:
+            soup = BeautifulSoup(raw_content, features='html.parser')
+            text = re.sub(r'\s', '', soup.get_text())
+            return len(text)
+        self.conn.create_function("count_characters", 1, count_characters)
+
         def extract_blue_text(raw_content: str) -> Optional[str]:
             soup = BeautifulSoup(raw_content, features='html.parser')
 
@@ -174,8 +180,8 @@ class DB:
                 thread.current_reply_count - COALESCE(later_changes.increased_response_count, 0),
                 SUM(CASE WHEN post.user_id = thread.user_id THEN 1 ELSE 0 END),
                 COUNT(DISTINCT post.user_id),
-                SUM(length(post.content)) + (CASE WHEN thread.created_at >= ? AND post.created_at < ? THEN length(thread.content) ELSE 0 END),
-                SUM(CASE WHEN post.user_id = thread.user_id THEN length(post.content) ELSE 0 END) + (CASE WHEN thread.created_at >= ? AND post.created_at < ? THEN length(thread.content) ELSE 0 END),
+                SUM(count_characters(post.content)) + (CASE WHEN thread.created_at >= ? AND post.created_at < ? THEN count_characters(thread.content) ELSE 0 END),
+                SUM(CASE WHEN post.user_id = thread.user_id THEN count_characters(post.content) ELSE 0 END) + (CASE WHEN thread.created_at >= ? AND post.created_at < ? THEN count_characters(thread.content) ELSE 0 END),
                 extract_blue_text(CASE WHEN revision_at_that_time.id IS NULL THEN thread.content ELSE revision_at_that_time.content END)
             FROM post
             LEFT JOIN thread ON post.parent_thread_id = thread.id
@@ -207,8 +213,8 @@ class DB:
                 total_reply_count=row[6],
                 increased_response_count_by_po=row[7],
                 distinct_cookie_count=row[8],
-                increased_text_bytes=row[9],
-                increased_text_bytes_by_po=row[10],
+                increased_character_count=row[9],
+                increased_character_count_by_po=row[10],
                 blue_text=row[11],
                 has_new_blue_text=self.__has_new_blue_text(
                     date, row[0], is_new, row[11])
