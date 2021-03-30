@@ -231,7 +231,7 @@ class DB:
 
         lower_bound, upper_bound = self._get_boundaries(date)
 
-        new_blue_texts = self.conn.execute('''
+        new_blue_texts = self.conn.execute(r'''
             SELECT
                 extract_blue_text(thread_old_revision.content) AS blue_text,
                 not_anymore_at_least_after
