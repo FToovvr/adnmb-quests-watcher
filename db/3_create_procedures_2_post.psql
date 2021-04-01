@@ -1,0 +1,47 @@
+CREATE PROCEDURE record_post(
+    in _parent_thread_id        integer,
+
+    in _id                      integer,
+    in _created_at              timestamptz,
+    in _user_id                 text,
+    in _content                 text,
+    in _attachment_base         text,
+    in _attachment_extension    text,
+    in _name                    text,
+    in _email                   text,
+    in _title                   text,
+    in _misc_fields             jsonb
+) AS $$
+    DECLARE
+        _registered_completed_thread_ids integer[];
+        _registered_completed_thread_id  integer;
+    BEGIN
+
+        INSERT INTO post (
+            parent_thread_id,
+            id, created_at, user_id, content,
+            attachment_base, attachment_extension,
+            name, email, title, misc_fields
+        ) VALUES (
+            _parent_thread_id,
+            _id, _created_at, _user_id, _content,
+            _attachment_base, _attachment_extension,
+            _name, _email, _title, _misc_fields
+        );
+
+        IF _parent_thread_id = current_setting('fto.COMPLETION_REGISTRY_THREAD_ID')::integer THEN
+            -- XXX: 没考虑因修改而 post_id 重复或对应的内容不再包含对应的串号的情况
+            _registered_completed_thread_ids := ARRAY(
+                SELECT (regexp_matches(_content, 'No\.(\d+)', 'g'))[1]::integer
+            );
+            FOREACH _registered_completed_thread_id IN ARRAY _registered_completed_thread_ids
+            LOOP
+                UPDATE thread_extra
+                SET completion_registry_post_ids
+                    = array_append(COALESCE(completion_registry_post_ids, ARRAY[]::integer[]), _id)
+                WHERE id = _registered_completed_thread_id;
+            END LOOP;
+        END IF;
+
+    END;
+    $$ LANGUAGE plpgsql;

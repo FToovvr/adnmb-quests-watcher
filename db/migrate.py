@@ -27,21 +27,29 @@ if len(sys.argv) != 3:
 def main():
     conn_s3 = sqlite3.connect(sys.argv[1])
     with psycopg2.connect(sys.argv[2]) as conn_pg:
+        conn_pg: psycopg2._psycopg.connection = conn_pg
         with conn_pg.cursor() as cur_pg:
+            cur_pg: psycopg2._psycopg.cursor = cur_pg
+
+            cur_pg.execute(
+                r'''SELECT set_config('fto.MIGRATING', %s::text, FALSE)''', (True,))
+            cur_pg.execute(
+                r'''SELECT set_config('fto.COMPLETION_REGISTRY_THREAD_ID', %s::text, FALSE)''', (22762342,))
+            cur_pg.execute(
+                r'''SELECT set_config('fto.REVISION_RECORDING_START_TIME', %s::text, FALSE)''', ('2021-03-17 00:00+8',))
 
             for migrate_fn in [
                 migrate_activity_table,
                 migrate_thread_table,
-                migrate_thread_old_revision_table,
-                migrate_thread_extra_table,
                 migrate_post_table,
-                migrate_completion_registry_entry,
                 migrate_publishing_trace,
                 migrate_published_post,
             ]:
                 print(f"start: {migrate_fn.__name__}")
                 migrate_fn(conn_s3, cur_pg)
                 print(f"done: {migrate_fn.__name__}")
+
+            print(conn_pg.notifies)
 
     conn_pg.close()
     conn_s3.close()
@@ -66,46 +74,66 @@ def migrate_activity_table(conn_s3: sqlite3.Connection, cur_pg: psycopg2._psycop
 
 
 def migrate_thread_table(conn_s3: sqlite3.Connection, cur_pg: psycopg2._psycopg.cursor):
+
+    last = [None, None]
+    for [
+        id, content,
+        name, email, title,
+        created_at, user_id, attachment_base, attachment_extension,
+        misc_fields,
+        not_anymore_at_least_after,
+    ] in conn_s3.execute(r'''
+        SELECT
+            thread_old_revision.id, thread_old_revision.content,
+            thread_old_revision.name, thread_old_revision.email, thread_old_revision.title,
+            thread.created_at, thread.user_id, thread.attachment_base, thread.attachment_extension,
+            thread.misc_fields,
+            not_anymore_at_least_after
+        FROM thread_old_revision
+        LEFT JOIN thread ON thread_old_revision.id = thread.id
+        ORDER BY thread_old_revision.id ASC, not_anymore_at_least_after ASC
+    '''):
+        updated_at = None
+        if last[0] == id:
+            updated_at = ts2dt(last[1])
+        cur_pg.execute(r'''
+            CALL record_thread(''' + ', '.join([r'%s']*12) + r''')
+            ''', (
+            id, ts2dt(created_at), user_id, content,
+            attachment_base, attachment_extension,
+            name, email, title, misc_fields,
+            None,
+            updated_at,
+        ))
+        last = [id, not_anymore_at_least_after]
+
     for [
         id, created_at, user_id, content, current_reply_count,
         attachment_base, attachment_extension,
         name, email, title, misc_fields,
-    ] in conn_s3.execute(r'SELECT * FROM thread'):
+        latest_checked_at, is_disappeared,
+        current_revision_checked_at,
+    ] in conn_s3.execute(r'''
+            SELECT thread.*,
+                checked_at AS latest_checked_at, is_disappeared,
+                MAX(not_anymore_at_least_after) AS current_revision_checked_at
+            FROM thread
+            LEFT JOIN thread_extra ON thread.id = thread_extra.id
+            LEFT JOIN thread_old_revision ON thread.id = thread_old_revision.id
+            GROUP BY thread.id
+        '''):
         cur_pg.execute(r'''
-            INSERT INTO thread
-            VALUES (''' + ', '.join([r'%s']*11) + r''')
-            ON CONFLICT DO NOTHING
+            CALL record_thread(''' + ', '.join([r'%s']*12) + r''')
             ''', (
             id, ts2dt(created_at), user_id, content,
             attachment_base, attachment_extension,
             name, email, title, misc_fields,
             current_reply_count,
+            ts2dt(current_revision_checked_at),
         ))
-
-
-def migrate_thread_old_revision_table(conn_s3: sqlite3.Connection, cur_pg: psycopg2._psycopg.cursor):
-    for [
-        id, not_anymore_at_least_after, content, name, email, title,
-    ] in conn_s3.execute(r'SELECT * FROM thread_old_revision'):
         cur_pg.execute(r'''
-            INSERT INTO thread_old_revision (id, not_anymore_at_least_after, content, name, email, title, is_not_complete)
-            VALUES (''' + ', '.join([r'%s']*7) + r''')
-            ON CONFLICT DO NOTHING
-        ''', (
-            id, ts2dt(
-                not_anymore_at_least_after), content, name, email, title, True,
-        ))
-
-
-def migrate_thread_extra_table(conn_s3: sqlite3.Connection, cur_pg: psycopg2._psycopg.cursor):
-    for [
-        id, checked_at, is_disappeared,
-    ] in conn_s3.execute(r'SELECT * FROM thread_extra'):
-        cur_pg.execute(r'''
-            INSERT INTO thread_extra
-            VALUES (%s, %s, %s)
-            ON CONFLICT DO NOTHING
-        ''', (id, ts2dt(checked_at), bool(is_disappeared)))
+            CALL report_is_thread_disappeared(%s, %s, %s)
+        ''', (id, bool(is_disappeared), ts2dt(latest_checked_at)))
 
 
 def migrate_post_table(conn_s3: sqlite3.Connection, cur_pg: psycopg2._psycopg.cursor):
@@ -116,28 +144,15 @@ def migrate_post_table(conn_s3: sqlite3.Connection, cur_pg: psycopg2._psycopg.cu
         name, email, title, misc_fields,
     ] in enumerate(conn_s3.execute(r'SELECT * FROM post')):
         cur_pg.execute(r'''
-            INSERT INTO post
-            VALUES (''' + ', '.join([r'%s']*11) + r''')
-            ON CONFLICT DO NOTHING
+            CALL record_post(''' + ', '.join([r'%s']*11) + r''')
             ''', (
+            parent_thread_id,
             id, ts2dt(created_at), user_id, content,
             attachment_base, attachment_extension,
             name, email, title, misc_fields,
-            parent_thread_id,
         ))
         if i % 100 == 0:
             print(f"{i+1}/{n}")
-
-
-def migrate_completion_registry_entry(conn_s3: sqlite3.Connection, cur_pg: psycopg2._psycopg.cursor):
-    for [
-        id, post_id, subject_thraed_id, has_blue_text_been_added,
-    ] in conn_s3.execute(r'SELECT * FROM completion_registry_entry'):
-        cur_pg.execute(r'''
-            INSERT INTO completion_registry_entry
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT DO NOTHING
-        ''', (id, post_id, subject_thraed_id, bool(has_blue_text_been_added)))
 
 
 def migrate_publishing_trace(conn_s3: sqlite3.Connection, cur_pg: psycopg2._psycopg.cursor):

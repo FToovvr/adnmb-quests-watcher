@@ -1,0 +1,57 @@
+-- CREATE FUNCTION extract_blue_texts(in content text)
+--     RETURNS text[] AS $$
+--     DECLARE
+--         _blue_texts text[];
+--     BEGIN
+--         -- XXX: 也不管严谨性了
+--         _blue_texts := ARRAY(SELECT (regexp_matches(content, '<(\S+?) (?:color="\s*blue\s*"|style="(?:.*;)?\s*color\s*:\s*blue\s*(?:;.*?)?").*?>(.*?)</\1.*?>', 'g'))[2]);
+--         IF cardinality(_blue_texts) = 0 THEN
+--             RETURN NULL;
+--         ELSE
+--             RETURN _blue_texts;
+--         END IF;
+--     END;
+--     $$ LANGUAGE plpgsql;
+CREATE FUNCTION extract_blue_texts(in content text)
+    RETURNS text[] AS $$
+    DECLARE
+        _wrapped_content text;
+        _elems xml[];
+        _elem xml;
+        _attr text;
+        _blue_texts xml[];
+    BEGIN
+        _wrapped_content := concat('<article>', content, '</article>');
+        IF NOT xml_is_well_formed_content(_wrapped_content) THEN
+            RETURN NULL;
+        END IF;
+
+        SELECT xpath('//*[@color] | //*[@style]', _wrapped_content::xml)
+        INTO _elems;
+
+        _blue_texts := ARRAY[]::xml[];
+        FOREACH _elem IN ARRAY _elems
+        LOOP
+            IF TRIM((SELECT (xpath('/*/@color', _elem))[1]::text)) = 'blue' THEN
+                _blue_texts := array_append(_blue_texts, _elem);
+            ELSIF (SELECT (xpath('/*/@style', _elem))[1]::text) ~* '(.*;)?\s*color\s*:\s*blue\s*(;.*)?' THEN
+                _blue_texts := array_append(_blue_texts, _elem);
+            END IF;
+        END LOOP;
+
+        IF cardinality(_blue_texts) = 0 THEN
+            RETURN NULL;
+        ELSE
+            RETURN _blue_texts;
+        END IF;
+    END;
+    $$ LANGUAGE plpgsql;
+
+CREATE FUNCTION thread_last_revision(in _id integer)
+    RETURNS SETOF thread_old_revision AS $$
+    SELECT *
+    FROM thread_old_revision 
+    WHERE thread_old_revision.id = _id
+    ORDER BY expired_before DESC
+    LIMIT 1;
+    $$ LANGUAGE sql;

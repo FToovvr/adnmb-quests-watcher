@@ -1,0 +1,103 @@
+CREATE PROCEDURE record_thread(
+    in _id                      integer,
+    in _created_at              timestamptz,
+    in _user_id                 text,
+    in _content                 text,
+    in _attachment_base         text,
+    in _attachment_extension    text,
+    in _name                    text,
+    in _email                   text,
+    in _title                   text,
+    in _misc_fields             jsonb,
+
+    in _current_reply_count     integer,
+    in _updated_at              timestamptz
+) AS $$
+    DECLARE
+        _blue_texts text[];
+        _old_blue_texts text[];
+    BEGIN
+        IF NOT current_setting('fto.MIGRATING')::boolean THEN
+            IF _updated_at IS NULL THEN
+                RAISE EXCEPTION '_updated_at must not be null';
+            END IF;
+        END IF;
+
+        IF EXISTS(SELECT thread.id FROM thread WHERE thread.id = _id)
+            AND NOT EXISTS(
+                SELECT thread.id FROM thread
+                WHERE thread.id = _id AND thread.created_at = _created_at AND thread.user_id = _user_id AND thread.content = _content
+                    AND thread.attachment_base = _attachment_base AND thread.attachment_extension = _attachment_extension
+                    AND thread.name = _name AND thread.email = _email AND thread.title = _title AND thread.misc_fields = _misc_fields
+            ) THEN
+            INSERT INTO thread_old_revision (
+                id, created_at, user_id, content,
+                attachment_base, attachment_extension,
+                name, email, title, misc_fields,
+                expired_before,
+                is_not_complete
+            ) SELECT 
+                thread.id, thread.created_at, thread.user_id, thread.content,
+                thread.attachment_base, thread.attachment_extension,
+                thread.name, thread.email, thread.title, thread.misc_fields,
+                _updated_at,
+                current_setting('fto.MIGRATING')::boolean
+            FROM thread
+            WHERE thread.id = _id;
+        END IF;
+
+        INSERT INTO thread (
+            id, created_at, user_id, content,
+            attachment_base, attachment_extension,
+            name, email, title, misc_fields
+        ) VALUES (
+            _id, _created_at, _user_id, _content,
+            _attachment_base, _attachment_extension,
+            _name, _email, _title, _misc_fields
+        )
+        ON CONFLICT (id) DO
+            UPDATE SET
+                created_at = EXCLUDED.created_at,
+                user_id = EXCLUDED.user_id,
+                content = EXCLUDED.content,
+                attachment_base = EXCLUDED.attachment_base,
+                attachment_extension = EXCLUDED.attachment_extension,
+                name = EXCLUDED.name,
+                email = EXCLUDED.email,
+                title = EXCLUDED.title,
+                misc_fields = EXCLUDED.misc_fields;
+
+        INSERT INTO thread_extra (id, updated_at, current_reply_count)
+        VALUES (_id, _updated_at, _current_reply_count)
+        ON CONFLICT (id) DO
+            UPDATE SET
+                updated_at = EXCLUDED.updated_at,
+                current_reply_count = EXCLUDED.current_reply_count;
+
+        _blue_texts := extract_blue_texts(_content);
+        IF _blue_texts IS NOT NULL THEN
+            _old_blue_texts := (SELECT extract_blue_texts(content) FROM thread_last_revision(_id));
+            IF _old_blue_texts IS NULL OR _old_blue_texts != _blue_texts THEN
+                UPDATE thread_extra
+                SET has_blue_text_before
+                    -- 只有在迁移的情况下 _updated_at 才可能是 null。
+                    -- 在开始记录版本变化前就有的蓝字，只能把已知蓝字开始出现的最早时间以开始记录版本变化之后的某个时间做标记
+                    = COALESCE(_updated_at, current_setting('fto.REVISION_RECORDING_START_TIME')::timestamptz)
+                WHERE id = _id;
+            END IF;
+        END IF;
+
+    END;
+    $$ LANGUAGE plpgsql;
+
+CREATE PROCEDURE report_is_thread_disappeared(
+    in _thread_id       integer,
+    in _is_disappeared  boolean,
+    in _updated_at      timestamptz
+) AS $$
+    UPDATE thread_extra
+    SET
+        is_disappeared = _is_disappeared,
+        updated_at = CASE WHEN is_disappeared AND _is_disappeared THEN updated_at ELSE _updated_at END
+    WHERE id = _thread_id;
+    $$ LANGUAGE sql;
