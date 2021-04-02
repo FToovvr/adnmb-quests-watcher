@@ -15,7 +15,6 @@ CREATE PROCEDURE record_thread(
 ) AS $$
     DECLARE
         _blue_texts text[];
-        _old_blue_texts text[];
     BEGIN
         IF NOT current_setting('fto.MIGRATING')::boolean THEN
             IF _updated_at IS NULL THEN
@@ -76,15 +75,9 @@ CREATE PROCEDURE record_thread(
 
         _blue_texts := extract_blue_texts(_content);
         IF _blue_texts IS NOT NULL THEN
-            _old_blue_texts := (SELECT extract_blue_texts(content) FROM thread_last_revision(_id));
-            IF _old_blue_texts IS NULL OR _old_blue_texts != _blue_texts THEN
-                UPDATE thread_extra
-                SET has_blue_text_before
-                    -- 只有在迁移的情况下 _updated_at 才可能是 null。
-                    -- 在开始记录版本变化前就有的蓝字，只能把已知蓝字开始出现的最早时间以开始记录版本变化之后的某个时间做标记
-                    = COALESCE(_updated_at, current_setting('fto.REVISION_RECORDING_START_TIME')::timestamptz)
-                WHERE id = _id;
-            END IF;
+            UPDATE thread_extra
+            SET has_blue_texts = TRUE
+            WHERE id = _id;
         END IF;
 
     END;

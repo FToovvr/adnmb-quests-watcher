@@ -55,3 +55,63 @@ CREATE FUNCTION thread_last_revision(in _id integer)
     ORDER BY expired_before DESC
     LIMIT 1;
     $$ LANGUAGE sql;
+
+CREATE FUNCTION thread_revisions_betwwen(
+    in _thread_id    integer,
+    in _lower_bound  timestamptz,
+    in _upper_bound  timestamptz
+) RETURNS SETOF thread_old_revision AS $$
+    WITH revisions AS (
+        SELECT *
+        FROM thread_old_revision
+        WHERE id = _thread_id
+        UNION
+        SELECT *,
+            now(), -- 对应 expired_before，保证是其中的最大值
+            FALSE
+        FROM thread
+        WHERE id = _thread_id
+    )
+    SELECT *
+    FROM revisions
+    WHERE expired_before >= _lower_bound AND expired_before < _upper_bound
+    UNION (
+    SELECT id, created_at, user_id, content, attachment_base, attachment_extension, name, email, title, misc_fields,
+        CASE WHEN expired_before = now() THEN NULL ELSE expired_before END AS expired_before, is_not_complete
+    FROM revisions
+    WHERE expired_before >= _upper_bound
+    ORDER BY expired_before ASC
+    LIMIT 1) -- LIMIT 1 优先级低…
+    $$ LANGUAGE sql;
+
+CREATE FUNCTION thread_got_new_blue_texts_between(
+    in _thread_id    integer,
+    in _lower_bound  timestamptz,
+    in _upper_bound  timestamptz
+) RETURNS boolean AS $$
+    DECLARE
+        _contents text[];
+        _blue_text_before xml[];
+        _blue_text_after xml[];
+    BEGIN
+
+        _contents := ARRAY(SELECT content FROM thread_revisions_betwwen(_thread_id, _lower_bound, _upper_bound));
+
+        IF cardinality(_contents) < 2 THEN
+            -- 只有一个代表收录之时就是当前内容，即使有蓝字也无法确认是否是新更新的蓝字
+            RETURN FALSE;
+        END IF;
+
+        _blue_text_before := (SELECT extract_blue_texts(_contents[1]));
+        _blue_text_after := (SELECT extract_blue_texts(_contents[array_upper(_contents, 1)]));
+        
+        IF _blue_text_after IS NULL THEN
+            RETURN FALSE;
+        ELSIF _blue_text_before IS NULL THEN
+            RETURN TRUE;
+        END IF;
+
+        RETURN _blue_text_after != _blue_text_before;
+
+    END
+    $$ LANGUAGE plpgsql;

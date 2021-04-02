@@ -50,7 +50,7 @@ CREATE TABLE thread_extra (
 
     is_disappeared      boolean DEFAULT FALSE,
 
-    has_blue_text_before            timestamptz,
+    has_blue_texts                  boolean,
     completion_registry_post_ids    integer[],
 
     PRIMARY KEY (id),
