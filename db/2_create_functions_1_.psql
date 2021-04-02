@@ -1,19 +1,5 @@
--- CREATE FUNCTION extract_blue_texts(in content text)
---     RETURNS text[] AS $$
---     DECLARE
---         _blue_texts text[];
---     BEGIN
---         -- XXX: 也不管严谨性了
---         _blue_texts := ARRAY(SELECT (regexp_matches(content, '<(\S+?) (?:color="\s*blue\s*"|style="(?:.*;)?\s*color\s*:\s*blue\s*(?:;.*?)?").*?>(.*?)</\1.*?>', 'g'))[2]);
---         IF cardinality(_blue_texts) = 0 THEN
---             RETURN NULL;
---         ELSE
---             RETURN _blue_texts;
---         END IF;
---     END;
---     $$ LANGUAGE plpgsql;
 CREATE FUNCTION extract_blue_texts(in content text)
-    RETURNS text[] AS $$
+    RETURNS xml[] AS $$
     DECLARE
         _wrapped_content text;
         _elems xml[];
@@ -82,6 +68,16 @@ CREATE FUNCTION thread_revisions_betwwen(
     WHERE expired_before >= _upper_bound
     ORDER BY expired_before ASC
     LIMIT 1) -- LIMIT 1 优先级低…
+    $$ LANGUAGE sql;
+
+CREATE FUNCTION thread_latest_revision_before(
+    in _thread_id   integer,
+    in _time        timestamptz
+) RETURNS SETOF thread_old_revision AS $$
+        SELECT *
+        FROM thread_revisions_betwwen(_thread_id, to_timestamp(0), _time)
+        ORDER BY expired_before IS NULL DESC, expired_before DESC
+        LIMIT 1;
     $$ LANGUAGE sql;
 
 CREATE FUNCTION thread_got_new_blue_texts_between(

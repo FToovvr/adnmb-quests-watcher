@@ -1,0 +1,115 @@
+CREATE FUNCTION extract_text(in _content text)
+    RETURNS text AS $$
+    DECLARE
+        _wrapped_content text;
+    BEGIN
+        _wrapped_content := concat('<article>', _content, '</article>');
+        IF NOT xml_is_well_formed_content(_wrapped_content) THEN
+            RETURN _content;
+        END IF;
+
+        RETURN (SELECT string_agg(unnest::text, '') FROM unnest(xpath('/*//text()', _wrapped_content::xml)));
+    END
+    $$ LANGUAGE plpgsql;
+
+CREATE FUNCTION remove_all_spaces(in _content text)
+    RETURNS text AS $$
+        SELECT regexp_replace(_content, '\s', '', 'g');
+    $$ LANGUAGE sql;
+
+CREATE FUNCTION count_content_characters(in _content text)
+    RETURNS integer AS $$
+        SELECT LENGTH(remove_all_spaces(extract_text(_content)));
+    $$ LANGUAGE sql;
+
+CREATE FUNCTION in_boundaries(in _time timestamptz, in _lower_bound timestamptz, in _upper_bound timestamptz)
+    RETURNS boolean AS $$
+        SELECT _time >= _lower_bound AND _time < _upper_bound
+    $$ LANGUAGE sql;
+
+CREATE FUNCTION get_daily_threads_report(
+    in _lower_bound timestamptz,
+    in _upper_bound timestamptz
+) RETURNS TABLE (
+    id              integer,
+    created_at      timestamptz,
+    is_new          boolean,
+    is_disappeared  boolean,
+
+    title   text,
+    name    text,
+    content text,
+
+    total_response_count            integer,
+    increased_response_count        integer,
+    increased_response_count_by_po  integer,
+    distinct_cookie_count           integer,
+    increased_character_count       integer,
+    increased_character_count_by_po  integer,
+
+    blue_texts          xml[],
+    are_blue_texts_new  boolean
+) AS $$
+
+    WITH new_post AS (
+        SELECT
+            parent_thread_id,
+            id, user_id,
+            count_content_characters(content) AS content_character_count
+        FROM post
+        WHERE in_boundaries(post.created_at, _lower_bound, _upper_bound)
+    )
+    SELECT
+
+        current_thread.id,
+        current_thread.created_at,
+        in_boundaries(current_thread.created_at, _lower_bound, _upper_bound) AS is_new,
+        -- CASE WHEN current_thread.is_disappeared THEN
+        --     CASE WHEN current_thread.updated_at < _upper_bound THEN TRUE ELSE FALSE END
+        -- ELSE FALSE END AS is_disappeared,
+        current_thread.is_disappeared,
+
+        current_thread.title,
+        current_thread.name,
+        current_thread.content,
+
+        current_thread.current_reply_count - (
+            SELECT COUNT(id) FROM post
+            WHERE post.parent_thread_id = current_thread.id 
+                AND created_at >= _upper_bound) AS total_response_count,
+        COUNT(new_post.id) AS increased_response_count,
+        SUM(CASE WHEN current_thread.user_id = new_post.user_id THEN 1 ELSE 0 END) AS increased_response_count_by_po,
+        COUNT(DISTINCT new_post.user_id) AS distinct_cookie_count,
+        SUM(new_post.content_character_count)
+            + CASE WHEN in_boundaries(current_thread.created_at, _lower_bound, _upper_bound) THEN count_content_characters(current_thread.content) ELSE 0 END
+            AS increased_character_count,
+        SUM(CASE WHEN current_thread.user_id = new_post.user_id THEN new_post.content_character_count ELSE 0 END)
+            + CASE WHEN in_boundaries(current_thread.created_at, _lower_bound, _upper_bound) THEN count_content_characters(current_thread.content) ELSE 0 END
+            AS increased_character_count_by_po,
+
+        extract_blue_texts(current_thread.content) AS blue_texts,
+        thread_got_new_blue_texts_between(current_thread.id, _lower_bound, _upper_bound) AS are_blue_texts_new
+
+    FROM new_post
+    LEFT JOIN (
+        -- TODO: 有办法把这堆 ARRAY_AGG 去掉吗？
+        SELECT thread.id,
+            (ARRAY_AGG(current.created_at))[1] AS created_at,
+            (ARRAY_AGG(current.user_id))[1] AS user_id,
+            (ARRAY_AGG(current.title))[1] AS title,
+            (ARRAY_AGG(current.name))[1] AS name,
+            (ARRAY_AGG(current.content))[1] AS content,
+            (ARRAY_AGG(thread_extra.updated_at))[1] AS updated_at,
+            (ARRAY_AGG(thread_extra.is_disappeared))[1] AS is_disappeared,
+            (ARRAY_AGG(thread_extra.current_reply_count))[1] AS current_reply_count
+        FROM thread
+        LEFT JOIN LATERAL thread_latest_revision_before(thread.id, _upper_bound) AS current ON TRUE
+        LEFT JOIN thread_extra ON thread_extra.id = thread.id
+        WHERE EXISTS(SELECT id FROM new_post WHERE new_post.parent_thread_id = thread.id)
+        GROUP BY thread.id
+    ) AS current_thread ON current_thread.id = new_post.parent_thread_id
+    -- TODO: 有办法把 current_thread.id 之外的去掉吗？
+    GROUP BY current_thread.id, current_thread.created_at, current_thread.user_id, current_thread.title, current_thread.name, current_thread.content, current_thread.updated_at, current_thread.is_disappeared, current_thread.current_reply_count
+    ORDER BY increased_response_count DESC;
+
+    $$ LANGUAGE sql;

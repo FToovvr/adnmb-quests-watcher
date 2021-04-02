@@ -7,7 +7,7 @@ for i in $(seq 1 3); do
     echo
 done
 
-for i in $(seq 1 1); do
+for i in $(seq 1 2); do
     cat 2_create_functions_${i}_*.psql
     echo
 done

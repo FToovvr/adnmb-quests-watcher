@@ -14,7 +14,7 @@ CREATE PROCEDURE record_thread(
     in _updated_at              timestamptz
 ) AS $$
     DECLARE
-        _blue_texts text[];
+        _blue_texts xml[];
     BEGIN
         IF NOT current_setting('fto.MIGRATING')::boolean THEN
             IF _updated_at IS NULL THEN
