@@ -505,9 +505,9 @@ class TrendReportTextGenerator:
             content += '\n\n'
 
             content += '\n'.join([self._format_heading("　说明　"), '', ''])
-            content += f"「+X/Y」：\n{ZWSP}  「X」代表总增量，「Y」代表PO增量。\n"
+            content += f"「+X/Y」：\n　「X」代表总增量，「Y」代表PO增量。\n"
             content += '\n'
-            content += f"文本统计方式：\n{ZWSP}  {CHARACTER_COUNT_METHOD_EXPLANATION}。\n"
+            content += f"文本统计方式：\n　{CHARACTER_COUNT_METHOD_EXPLANATION}。\n"
             content += '\n'
 
         content += '\n'.join([self._format_heading("　趋势　"), '', ''])

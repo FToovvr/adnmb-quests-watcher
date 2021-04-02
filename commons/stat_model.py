@@ -34,6 +34,10 @@ class ThreadStats:
     def content(self) -> str:
         return BeautifulSoup(self.raw_content, features='html.parser').get_text()
 
+    @staticmethod
+    def insert_zwsps_everywhere(text: str) -> str:
+        return ZWSP.join(list(text))
+
     def generate_summary(self, free_lines: int) -> str:
         lines = []
         if self.title is not None:
@@ -41,13 +45,13 @@ class ThreadStats:
             if len(title) > 15:  # 以防万一
                 title = title[:14] + OMITTING
             free_lines -= 1
-            lines += [f"标题：{title}"]
+            lines += [f"标题：{ThreadStats.insert_zwsps_everywhere(title)}"]
         if self.name is not None:
             name = self.name.replace(ZWSP, '')
             if len(name) > 15:  # 以防万一
                 name = name[:14] + OMITTING
             free_lines -= 1
-            lines += [f"名称：{name}"]
+            lines += [f"名称：{ThreadStats.insert_zwsps_everywhere(name)}"]
         for content_line in self.content.split('\n'):
             if free_lines == 0:
                 lines += [OMITTING]
@@ -60,7 +64,7 @@ class ThreadStats:
                     break
                 line_to_add += line_part.replace(ZWSP, '')
                 free_lines -= 1
-            lines += [line_to_add]
+            lines += [ThreadStats.insert_zwsps_everywhere(line_to_add)]
         while True:
             if lines[-1].strip() == "":
                 lines.pop()

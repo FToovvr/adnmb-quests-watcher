@@ -52,7 +52,7 @@ def main():
             '--publish-on-thread', os.environ['ANOBBS_QUESTS_TREND_THREAD_ID'],
             '--check-sage',
             '--notify-thread', os.environ['ANOBBS_QUESTS_DAILY_QST_THREAD_ID'],
-            '--page-capacity', '20',
+            '--page-capacity', '15',
             '--including', 'not_below_q2',
             '--db-path', 'db.sqlite3',
         ])
