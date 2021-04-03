@@ -1,3 +1,19 @@
+CREATE FUNCTION unescape_html(in _html text)
+    RETURNS text AS $$
+        -- `(^|.+?)(?:&(.+?);|$)` 在其他正则引擎都能正常使用，
+        -- 但在 Postgres 里就会把原本的字符串整个返回，只好另辟蹊径了 ( ´_っ`)
+    SELECT string_agg(
+        CONCAT(x[1],
+            CASE WHEN x[2] = 'gt'   THEN '>'
+                 WHEN x[2] = 'lt'   THEN '<'
+                 WHEN x[2] = 'amp'  THEN '&'
+                 WHEN x[2] = 'quot' THEN '"'
+                 WHEN x[2] = 'end'  THEN ''
+                 ELSE x[2] END),
+        '')
+    FROM regexp_matches(CONCAT(_html, '&end;'), '(.*?)(?:&(.+?);)', 'g') AS x
+    $$ LANGUAGE sql;
+
 CREATE FUNCTION extract_text(in _content text)
     RETURNS text AS $$
     DECLARE
@@ -8,13 +24,16 @@ CREATE FUNCTION extract_text(in _content text)
             RETURN _content;
         END IF;
 
-        RETURN (SELECT string_agg(unnest::text, '') FROM unnest(xpath('/*//text()', _wrapped_content::xml)));
+        -- ( ´_ゝ`)旦 加了 unescape_html，
+        -- `SELECT remove_all_spaces(extract_text(content) FROM post`
+        -- 的查询时间延长到了原来了 3.6 倍
+        RETURN (SELECT unescape_html(string_agg(unnest::text, '')) FROM unnest(xpath('/*//text()', _wrapped_content::xml)));
     END
     $$ LANGUAGE plpgsql;
 
 CREATE FUNCTION remove_all_spaces(in _content text)
     RETURNS text AS $$
-        SELECT regexp_replace(_content, '\s', '', 'g');
+        SELECT regexp_replace(_content, '[\s\xa0]', '', 'g');
     $$ LANGUAGE sql;
 
 CREATE FUNCTION count_content_characters(in _content text)
