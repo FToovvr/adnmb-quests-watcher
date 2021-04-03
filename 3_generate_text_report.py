@@ -627,7 +627,7 @@ class TrendReportTextGenerator:
 
     def _generate_trending_board(self, threads: List[Tuple[int, ThreadStats]], i_start: int) -> str:
         lines = []
-        for (i, [rank, thread]) in enumerate(threads):
+        for [rank, thread] in threads:
             lines += [self.__generate_thread_entry(thread, rank)]
 
         return '\n'.join(lines)
