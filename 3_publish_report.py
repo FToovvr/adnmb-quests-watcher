@@ -18,13 +18,14 @@ from time import sleep
 
 import requests
 from bs4 import BeautifulSoup
+import psycopg2
 
 import anobbsclient
 from anobbsclient.walk import create_walker, ReversalThreadWalkTarget
 
 from commons import get_client, Trace, local_tz, ZWSP, OMITTING, get_target_date
-from commons.stat_model import ThreadStats, Counts, Stats, DB
-from commons.debugging import super_huge_thread
+from commons.stat_model_pg import ThreadStats, Counts, Stats, DB
+from commons.debugging import super_huge_thread_pg
 
 
 FORMAT_VERSION = '2.0'
@@ -46,7 +47,8 @@ class Arugments:
     including: including
     no_compare: bool
 
-    db_path: Path
+    connection_string: str
+    old_db_path: Path
 
     force_slience: bool
     force_no_publish: bool
@@ -121,8 +123,13 @@ def parse_args(args: List[str]) -> Arugments:
         help="报告不要包含与之前的数据的比较",
     )
     parser.add_argument(
-        '--db-path', type=str, default='db.sqlite3',
-        dest='db_path',
+        '-c', '--connection-string', type=str, default=None,
+        dest='connection_string',
+        help="数据库连接字符串",
+    )
+    parser.add_argument(
+        '--old-db-path', type=str, default='db.sqlite3',
+        dest='old_db_path',
         help="DB 所在的路径",
     )
     parser.add_argument(
@@ -160,9 +167,14 @@ def parse_args(args: List[str]) -> Arugments:
     else:
         assert(False)
 
-    parsed.db_path = Path(parsed.db_path)
-    if not parsed.db_path.exists():
-        print(f"{args.db_path} 不存在，将终止")
+    if parsed.connection_string is None:
+        with open('db/password.secret', 'r') as password_file:
+            password = password_file.read().strip()
+        parsed.connection_string = f'dbname=adnmb_qst_watcher user=postgres password={password} host=pi'
+
+    parsed.old_db_path = Path(parsed.old_db_path)
+    if not parsed.old_db_path.exists():
+        print(f"{args.old_db_path} 不存在，将终止")
         exit(1)
 
     force_slience = False
@@ -202,7 +214,8 @@ def parse_args(args: List[str]) -> Arugments:
         including=parsed.including,
         no_compare=parsed.no_compare,
 
-        db_path=parsed.db_path,
+        connection_string=parsed.connection_string,
+        old_db_path=parsed.old_db_path,
 
         force_slience=force_slience,
         force_no_publish=force_no_publish,
@@ -245,7 +258,7 @@ def main():
         client = None
 
     if args.needs_to_track:
-        trace = Trace(conn=sqlite3.connect(args.db_path),
+        trace = Trace(conn=sqlite3.connect(args.old_db_path),
                       date=args.target_date, type_='trend')
         attempts = trace.attempts
         if trace.is_done or attempts > 3:
@@ -269,6 +282,7 @@ def main():
         uuid = None
 
     pages = retrieve_data_then_generate_trend_report_text(
+        old_db_path=args.old_db_path, connection_string=args.connection_string,
         date=args.target_date, uuid=uuid,
         rank_inclusion_method=args.including,
         should_compare_with_last_day=not args.no_compare,
@@ -434,20 +448,24 @@ def find_last_post_with_uuid(client: anobbsclient.Client, thread_id: int) -> Opt
     return None
 
 
-def retrieve_data_then_generate_trend_report_text(date: datetime, uuid: str,
-                                                  rank_inclusion_method: Including,
-                                                  should_compare_with_last_day: bool,
-                                                  ) -> Tuple[str, str, str]:
-    with sqlite3.connect('file:db.sqlite3?mode=ro', uri=True) as conn:
-        db = DB(conn=conn)
-        return TrendReportTextGenerator(
-            db=db,
-            date=date,
-            rank_inclusion_method=rank_inclusion_method,
-            rank_page_capacity=RANK_PAGE_CAPACITY,
-            uuid=uuid,
-            should_compare_with_last_day=should_compare_with_last_day,
-        ).generate()
+def retrieve_data_then_generate_trend_report_text(
+    old_db_path: Path, connection_string: str,
+    date: datetime, uuid: str,
+    rank_inclusion_method: Including,
+    should_compare_with_last_day: bool,
+) -> Tuple[str, str, str]:
+    with psycopg2.connect(connection_string) as conn:
+        with conn.cursor() as cur:
+            with sqlite3.connect(f'file:{old_db_path}?mode=ro', uri=True) as conn_s3:
+                db = DB(conn=conn_s3, cur=cur)
+                return TrendReportTextGenerator(
+                    db=db,
+                    date=date,
+                    rank_inclusion_method=rank_inclusion_method,
+                    rank_page_capacity=RANK_PAGE_CAPACITY,
+                    uuid=uuid,
+                    should_compare_with_last_day=should_compare_with_last_day,
+                ).generate()
 
 
 @dataclass(frozen=True)
@@ -593,7 +611,7 @@ class TrendReportTextGenerator:
         threads_with_new_blue_text = []
         for (i, thread) in enumerate(self.threads):
             rank = i+1
-            if thread.has_new_blue_text:
+            if False:  # thread.are_blue_texts_new:
                 threads_with_new_blue_text.append([rank, thread])
             elif RANK_INCLUDING(thread, self.rank_inclusion_method, self.threads, self.counts):
                 included_threads.append([rank, thread])
@@ -616,7 +634,7 @@ class TrendReportTextGenerator:
         return '\n'.join(lines)
 
     def __generate_thread_entry(self, thread: ThreadStats, rank: int) -> str:
-        # thread = super_huge_thread  # DEBUGGING
+        # thread = super_huge_thread_pg  # DEBUGGING
         head = f"#{rank}"
         padding = len(head) + 1
         if thread.is_new:
@@ -654,13 +672,13 @@ class TrendReportTextGenerator:
         subhead_1 += [character_count]
         subhead_lines += [' '.join(subhead_1)]
 
-        if not self.db.is_thread_disappeared(thread.id):
+        if not thread.is_disappeared:
             blue_text = thread.blue_text
             if blue_text is not None:
                 blue_text = blue_text.strip()
                 if len(blue_text) > 8:
                     blue_text = blue_text[:8] + OMITTING
-                if thread.has_new_blue_text:
+                if thread.are_blue_texts_new:
                     subhead_lines += [f"(新蓝字！「{blue_text}」)"]
                 else:
                     subhead_lines += [f"(蓝字「{blue_text}」)"]
