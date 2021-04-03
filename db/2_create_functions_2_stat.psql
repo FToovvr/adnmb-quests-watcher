@@ -43,7 +43,7 @@ CREATE FUNCTION count_content_characters(in _content text)
 
 CREATE FUNCTION in_boundaries(in _time timestamptz, in _lower_bound timestamptz, in _upper_bound timestamptz)
     RETURNS boolean AS $$
-        SELECT _time >= _lower_bound AND _time < _upper_bound
+        SELECT _time >= _lower_bound AND _time < _upper_bound;
     $$ LANGUAGE sql;
 
 CREATE FUNCTION get_daily_threads_report(
@@ -131,4 +131,29 @@ CREATE FUNCTION get_daily_threads_report(
     GROUP BY current_thread.id, current_thread.created_at, current_thread.user_id, current_thread.title, current_thread.name, current_thread.content, current_thread.updated_at, current_thread.is_disappeared, current_thread.current_reply_count
     ORDER BY increased_response_count DESC;
 
+    $$ LANGUAGE sql;
+
+CREATE FUNCTION get_daily_qst_id_and_position(
+    in _daily_qst_thread_id integer,
+    in _lower_bound         timestamptz,
+    in _upper_bound         timestamptz
+) RETURNS TABLE (
+    post_id     integer,
+    "offset"    integer
+) AS $$
+    WITH daily_qst_post AS (
+        SELECT id, created_at FROM post
+        WHERE parent_thread_id = _daily_qst_thread_id
+            AND in_boundaries(created_at, _lower_bound, _upper_bound)
+            AND regexp_match(content, '^\[头条\]\s*<br />$', 'm') IS NOT NULL
+        ORDER BY created_at DESC
+        LIMIT 1
+    )
+    SELECT daily_qst_post.id, current_reply_count - (
+        SELECT COUNT(id) FROM post
+        WHERE parent_thread_id = _daily_qst_thread_id
+        AND created_at > daily_qst_post.created_at
+    )
+    FROM daily_qst_post
+    LEFT JOIN thread_extra ON thread_extra.id = _daily_qst_thread_id;
     $$ LANGUAGE sql;

@@ -183,27 +183,9 @@ class DB:
         """
         lower_bound, upper_bound = self._get_boundaries(date)
 
-        row = self.conn.execute(r'''
-            WITH daily_qst_replies_in_range AS (
-                SELECT id, content
-                FROM post
-                WHERE parent_thread_id = ?
-                    AND created_at >= ? AND created_at < ?
-            )
-            SELECT
-                a.id, current_reply_count - count(b.id)
-            FROM daily_qst_replies_in_range AS a
-            JOIN daily_qst_replies_in_range AS b ON b.id > a.id
-            LEFT JOIN thread ON thread.id = ?
-            WHERE rx_test("(.*\n)*\[头条\]\s*(<br />)?(\n.*)+", a.content)
-			GROUP BY a.id
-			ORDER BY a.id DESC
-			LIMIT 1
-        ''', (
-            daily_qst_thread_id,
-            lower_bound.timestamp(), upper_bound.timestamp(),
-            daily_qst_thread_id,
-        )).fetchone()
+        self.cur.execute(r'''SELECT * FROM get_daily_qst_id_and_position(%s, %s, %s)''',
+                         (daily_qst_thread_id, lower_bound, upper_bound))
+        row = self.cur.fetchone()
 
         return None if row is None else (row[0], row[1])
 
