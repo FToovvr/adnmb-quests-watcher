@@ -1,45 +1,26 @@
-CREATE FUNCTION unescape_html(in _html text)
-    RETURNS text AS $$
-        -- `(^|.+?)(?:&(.+?);|$)` 在其他正则引擎都能正常使用，
-        -- 但在 Postgres 里就会把原本的字符串整个返回，只好另辟蹊径了 ( ´_っ`)
-    SELECT string_agg(
-        CONCAT(x[1],
-            CASE WHEN x[2] = 'gt'   THEN '>'
-                 WHEN x[2] = 'lt'   THEN '<'
-                 WHEN x[2] = 'amp'  THEN '&'
-                 WHEN x[2] = 'quot' THEN '"'
-                 WHEN x[2] = 'end'  THEN ''
-                 ELSE x[2] END),
-        '')
-    FROM regexp_matches(CONCAT(_html, '&end;'), '(.*?)(?:&(.+?);)', 'g') AS x
-    $$ LANGUAGE sql;
-
-CREATE FUNCTION extract_text(in _content text)
-    RETURNS text AS $$
-    DECLARE
-        _wrapped_content text;
-    BEGIN
-        _wrapped_content := concat('<article>', _content, '</article>');
-        IF NOT xml_is_well_formed_content(_wrapped_content) THEN
-            RETURN _content;
-        END IF;
-
-        -- ( ´_ゝ`)旦 加了 unescape_html，
-        -- `SELECT remove_all_spaces(extract_text(content) FROM post`
-        -- 的查询时间延长到了原来了 3.6 倍
-        RETURN (SELECT unescape_html(string_agg(unnest::text, '')) FROM unnest(xpath('/*//text()', _wrapped_content::xml)));
-    END
-    $$ LANGUAGE plpgsql;
-
 CREATE FUNCTION remove_all_spaces(in _content text)
     RETURNS text AS $$
         SELECT regexp_replace(_content, '[\s\xa0]', '', 'g');
     $$ LANGUAGE sql;
 
-CREATE FUNCTION count_content_characters(in _content text)
+-- 原来的版本太慢了，由于要转义的内容结果都是一个字符，就直接替换成 `x` 了。
+-- 4.5s~4.6s -> 1.5s~1.6s.
+-- it works
+CREATE FUNCTION count_content_characters_works(in _content text)
     RETURNS integer AS $$
-        SELECT LENGTH(remove_all_spaces(extract_text(_content)));
-    $$ LANGUAGE sql;
+    DECLARE
+        _wrapped_content text;
+    BEGIN
+        _wrapped_content := concat('<article>', _content, '</article>');
+        IF NOT xml_is_well_formed_content(_wrapped_content) THEN
+            RETURN LENGTH(_content);
+        END IF;
+
+        RETURN (
+            SELECT LENGTH(REGEXP_REPLACE(string_agg(unnest::text, ''), '&.+?;', 'x'))
+            FROM unnest(xpath('/*//text()', _wrapped_content::xml)));
+    END
+    $$ LANGUAGE plpgsql;
 
 CREATE FUNCTION in_boundaries(in _time timestamptz, in _lower_bound timestamptz, in _upper_bound timestamptz)
     RETURNS boolean AS $$
@@ -74,7 +55,7 @@ CREATE FUNCTION get_daily_threads_report(
         SELECT
             parent_thread_id,
             id, user_id,
-            count_content_characters(content) AS content_character_count
+            count_content_characters_works(content) AS content_character_count
         FROM post
         WHERE in_boundaries(post.created_at, _lower_bound, _upper_bound)
     )
@@ -100,10 +81,10 @@ CREATE FUNCTION get_daily_threads_report(
         SUM(CASE WHEN current_thread.user_id = new_post.user_id THEN 1 ELSE 0 END) AS increased_response_count_by_po,
         COUNT(DISTINCT new_post.user_id) AS distinct_cookie_count,
         SUM(new_post.content_character_count)
-            + CASE WHEN in_boundaries(current_thread.created_at, _lower_bound, _upper_bound) THEN count_content_characters(current_thread.content) ELSE 0 END
+            + CASE WHEN in_boundaries(current_thread.created_at, _lower_bound, _upper_bound) THEN count_content_characters_works(current_thread.content) ELSE 0 END
             AS increased_character_count,
         SUM(CASE WHEN current_thread.user_id = new_post.user_id THEN new_post.content_character_count ELSE 0 END)
-            + CASE WHEN in_boundaries(current_thread.created_at, _lower_bound, _upper_bound) THEN count_content_characters(current_thread.content) ELSE 0 END
+            + CASE WHEN in_boundaries(current_thread.created_at, _lower_bound, _upper_bound) THEN count_content_characters_works(current_thread.content) ELSE 0 END
             AS increased_character_count_by_po,
 
         extract_blue_texts(current_thread.content) AS blue_texts,
@@ -135,6 +116,7 @@ CREATE FUNCTION get_daily_threads_report(
 
 CREATE FUNCTION get_daily_qst_id_and_position(
     in _daily_qst_thread_id integer,
+
     in _lower_bound         timestamptz,
     in _upper_bound         timestamptz
 ) RETURNS TABLE (
@@ -156,4 +138,57 @@ CREATE FUNCTION get_daily_qst_id_and_position(
     )
     FROM daily_qst_post
     LEFT JOIN thread_extra ON thread_extra.id = _daily_qst_thread_id;
+    $$ LANGUAGE sql;
+
+CREATE FUNCTION get_meta_stats(
+    in _lower_bound timestamptz,
+    in _upper_bound timestamptz
+) RETURNS TABLE (
+    uploaded_bytes      integer,
+    downloaded_bytes    integer,
+
+    requested_board_page_count  integer,
+    requested_thread_page_count integer
+) AS $$
+    SELECT 
+        COALESCE(sum(uploaded_bytes), 0), COALESCE(sum(downloaded_bytes), 0),
+        COALESCE(sum(requested_board_page_count), 0), COALESCE(sum(requested_thread_page_count), 0)
+    FROM activity
+    WHERE in_boundaries(fetched_since, _lower_bound, _upper_bound);
+    $$ LANGUAGE sql;
+
+CREATE FUNCTION get_tail_count(
+    in _lower_bound timestamptz,
+    in _upper_bound timestamptz
+) RETURNS TABLE (
+    tail_number integer,
+    count       integer
+) AS $$
+    SELECT id % 10 AS tail_number, COUNT(id)
+    FROM post
+    WHERE in_boundaries(created_at, _lower_bound, _upper_bound)
+        AND content in ('r', 'R')
+    GROUP BY tail_number
+    ORDER BY tail_number;
+    $$ LANGUAGE sql;
+
+CREATE FUNCTION get_count_of_tail_numbers_with_consecutive_digits(
+    in _min_digits  integer,
+
+    in _lower_bound timestamptz,
+    in _upper_bound timestamptz
+) RETURNS TABLE (
+    length      integer,
+    count       integer,
+    zero_count  integer
+) AS $$
+    WITH rx AS (
+        SELECT CONCAT('((\d)\2{', _min_digits-1,',}$)')
+    )
+    SELECT LENGTH(tail[1]), COUNT(id), SUM((tail[2] = '0')::INTEGER) AS zero_count
+    FROM post, regexp_match(id::text, (SELECT * FROM rx)) AS tail
+    WHERE in_boundaries(created_at, _lower_bound, _upper_bound)
+        AND tail IS NOT NULL
+    GROUP BY LENGTH(tail[1])
+    ORDER BY LENGTH(tail[1]) DESC;
     $$ LANGUAGE sql;

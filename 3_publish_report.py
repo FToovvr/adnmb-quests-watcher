@@ -456,16 +456,15 @@ def retrieve_data_then_generate_trend_report_text(
 ) -> Tuple[str, str, str]:
     with psycopg2.connect(connection_string) as conn:
         with conn.cursor() as cur:
-            with sqlite3.connect(f'file:{old_db_path}?mode=ro', uri=True) as conn_s3:
-                db = DB(conn=conn_s3, cur=cur)
-                return TrendReportTextGenerator(
-                    db=db,
-                    date=date,
-                    rank_inclusion_method=rank_inclusion_method,
-                    rank_page_capacity=RANK_PAGE_CAPACITY,
-                    uuid=uuid,
-                    should_compare_with_last_day=should_compare_with_last_day,
-                ).generate()
+            db = DB(cur=cur)
+            return TrendReportTextGenerator(
+                db=db,
+                date=date,
+                rank_inclusion_method=rank_inclusion_method,
+                rank_page_capacity=RANK_PAGE_CAPACITY,
+                uuid=uuid,
+                should_compare_with_last_day=should_compare_with_last_day,
+            ).generate()
 
 
 @dataclass(frozen=True)
@@ -718,7 +717,7 @@ class TrendReportTextGenerator:
         f_max_min = [max(f, key=lambda x: x[1])[0],
                      min(f, key=lambda x: x[1])[0]]
         f = list(map(lambda x: (
-            "{}={:05.2f}%*" if x[0] in f_max_min else "{}={:05.2f}% ").format(*x), f))
+            "{}={:05.2f}%*" if x[0] in f_max_min else "{}={:05.2f}% ").format(x[0], x[1]*100), f))
         lines = []
         for i in range(0, 10, 4):
             lines += [' '.join(f[i:i+4])]

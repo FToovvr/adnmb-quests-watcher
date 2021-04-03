@@ -2,7 +2,6 @@ from typing import Optional, Union, Tuple, List, Dict, OrderedDict
 from dataclasses import dataclass
 
 from datetime import datetime, timedelta, date
-import sqlite3
 import re
 import statistics
 
@@ -120,27 +119,12 @@ class Stats:
 class DB:
 
     cur: psycopg2._psycopg.cursor
-    conn: sqlite3.Connection
-
-    def __post_init__(self):
-
-        # python 的 sqlite3 不支持 REGEXP
-        def rx_test(pattern: str, string: str) -> bool:
-            return re.search(pattern, string) is not None
-        self.conn.create_function("rx_test", 2, rx_test)
-
-        def rx_nth_match(pattern: str, string: str, nth: int) -> Optional[str]:
-            r = re.match(pattern, string)
-            return None if r is None else r.group(nth)
-        self.conn.create_function("rx_nth_match", 3, rx_nth_match)
 
     def get_daily_threads(self, date: datetime) -> List[ThreadStats]:
         lower_bound, upper_bound = self._get_boundaries(date)
 
-        self.cur.execute(r'''
-            SELECT * FROM get_daily_threads_report(%s, %s)
-        ''', (lower_bound, upper_bound)
-        )
+        self.cur.execute(r'''SELECT * FROM get_daily_threads_report(%s, %s)''',
+                         (lower_bound, upper_bound))
         rows = self.cur.fetchall()
 
         threads: List[ThreadStats] = []
@@ -192,44 +176,27 @@ class DB:
     def get_meta_stats(self, date: datetime) -> Stats:
         lower_bound, upper_bound = self._get_boundaries(date)
 
-        row = self.conn.execute(r'''
-        SELECT 
-            IFNULL(sum(uploaded_bytes), 0), IFNULL(sum(downloaded_bytes), 0),
-            IFNULL(sum(requested_board_page_count), 0), IFNULL(sum(requested_thread_page_count), 0)
-        FROM activity
-        WHERE fetched_since >= ? AND fetched_since < ?
-        ''', (lower_bound.timestamp(), upper_bound.timestamp())).fetchone()
+        self.cur.execute(r'''SELECT * FROM get_meta_stats(%s, %s)''',
+                         (lower_bound, upper_bound))
+        row = self.cur.fetchone()
 
         return Stats((row[0], row[1]))
 
     def get_tail_frequencies(self, date: datetime) -> Tuple[int, Dict[int, float]]:
+        # TODO: 其实没必要在这里保持有序
+
         lower_bound, upper_bound = self._get_boundaries(date)
 
-        rows = self.conn.execute(r'''
-            WITH tail_count AS (
-                WITH post_tail AS (
-                    SELECT id % 10 AS tail_number
-                    FROM post
-                    WHERE created_at >= ? AND created_at < ?
-                        AND content LIKE 'r'
-                )
-                SELECT tail_number, count(tail_number) AS `count`
-                FROM post_tail
-                GROUP BY tail_number
-            )
-            SELECT tail_number, `count` * 1.0 / (SELECT sum(`count`) FROM tail_count) * 100 AS percentage
-            FROM tail_count
-        ''', (lower_bound.timestamp(), upper_bound.timestamp())).fetchall()
+        self.cur.execute(r'''SELECT * FROM get_tail_count(%s, %s)''',
+                         (lower_bound, upper_bound))
+        rows = self.cur.fetchall()
 
-        frequencies = OrderedDict({r[0]: r[1] for r in rows})
+        counts = OrderedDict({r[0]: r[1] for r in rows})
+        sum_count = sum(counts.values())
+        frequencies = OrderedDict((tail, float(count) / sum_count)
+                                  for tail, count in counts.items())
 
-        count = self.conn.execute(r'''
-            SELECT count(id) FROM post
-            WHERE created_at >= ? AND created_at < ?
-                AND content LIKE 'r'
-        ''', (lower_bound.timestamp(), upper_bound.timestamp())).fetchone()[0]
-
-        return (count, frequencies)
+        return (sum_count, frequencies)
 
     def get_consecutive_tail_counts(self, date: datetime, n: int) -> Tuple[int, int, int]:
         """
@@ -241,33 +208,16 @@ class DB:
             个数。
         [2]
             0 的个数。
+
+        TODO
+        ----
+        其实没必要在这里保持有序。
         """
         lower_bound, upper_bound = self._get_boundaries(date)
 
-        rows = self.conn.execute(r'''
-        WITH lucky_tail_info AS (
-            WITH lucky_tail AS (
-                SELECT rx_nth_match("\d+?((\d)\2+)$", cast(id AS TEXT), 1) AS tail
-                FROM post
-                WHERE created_at >= ? AND created_at < ?
-                    AND rx_test("(\d)\1{" || ? || ",}$", cast(id AS TEXT))
-                ORDER BY id
-            )
-            SELECT
-                length(tail) AS length,
-                cast(tail AS INTEGER) = 0 AS is_zero
-            FROM lucky_tail
-        )
-        SELECT
-            length,
-            COUNT(*) AS `count`,
-            SUM(is_zero) AS `zero_count`
-        FROM lucky_tail_info
-        GROUP BY length
-        ORDER BY length DESC
-        ''', (lower_bound.timestamp(), upper_bound.timestamp(), n-1))
-
-        return rows.fetchall()
+        self.cur.execute(r'''SELECT * FROM get_count_of_tail_numbers_with_consecutive_digits(%s, %s, %s)''',
+                         (n, lower_bound, upper_bound))
+        return self.cur.fetchall()
 
     def _get_boundaries(self, date: date) -> Tuple[datetime, datetime]:
         lower_bound = datetime.fromisoformat(
