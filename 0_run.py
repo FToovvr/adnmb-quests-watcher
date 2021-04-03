@@ -41,20 +41,14 @@ def main():
         result = subprocess.run([
             './2.5_check_status_of_threads.py',
             target_date.isoformat(),
-            '--board-id', '111',
-            '--db-path', './db.sqlite3',
         ])
         assert(result.returncode == 0)
 
     if not is_publication_done:
         result = subprocess.run([
             './3_publish_report.py', target_date.isoformat(),
-            '--publish-on-thread', os.environ['ANOBBS_QUESTS_TREND_THREAD_ID'],
             '--check-sage',
-            '--notify-thread', os.environ['ANOBBS_QUESTS_DAILY_QST_THREAD_ID'],
-            '--page-capacity', '15',
-            '--including', 'not_below_q2',
-            '--db-path', 'db.sqlite3',
+            '--publish', '--notify-daily-qst',
         ])
         assert(result.returncode == 0)
 

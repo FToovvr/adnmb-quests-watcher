@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 from __future__ import annotations
-from typing import Any, Tuple, List, Dict, OrderedDict, Optional, Union
+from typing import Any, Tuple, List, Dict, OrderedDict, Optional, Union, Literal
 from dataclasses import dataclass, field
 
 import argparse
@@ -23,7 +23,8 @@ import psycopg2
 import anobbsclient
 from anobbsclient.walk import create_walker, ReversalThreadWalkTarget
 
-from commons import get_client, Trace, local_tz, ZWSP, OMITTING, get_target_date
+from commons import Trace, local_tz, ZWSP, OMITTING, get_target_date
+from commons.config import load_config, ClientConfig
 from commons.stat_model_pg import ThreadStats, Counts, Stats, DB
 from commons.debugging import super_huge_thread_pg
 
@@ -32,36 +33,39 @@ FORMAT_VERSION = '2.0'
 CHARACTER_COUNT_METHOD_VERSION = '2'
 CHARACTER_COUNT_METHOD_EXPLANATION = "除换行与一般空白外字符的个数"
 
-DAILY_QST_THREAD_ID = int(os.environ.get(
-    'ANOBBS_QUESTS_DAILY_QST_THREAD_ID', -1))
-DAILY_QST_THREAD_ID = None if DAILY_QST_THREAD_ID is None else DAILY_QST_THREAD_ID
-
 
 @dataclass(frozen=True)
 class Arugments:
     target_date: date
-    publish_on_thread: Optional[int]
+
     check_sage: bool
-    notify_thread: Optional[int]
+
+    trend_thread_id: int
+    publish_on_trend_thread: bool
+    daily_qst_thread_id: int
+    notify_target: Union[
+        None,
+        Literal['daily_qst_thread'],
+        Literal['trend_thread']
+    ]
+
     page_capacity: int
     including: including
     no_compare: bool
 
     connection_string: str
-    old_db_path: Path
 
     force_slience: bool
-    force_no_publish: bool
+
+    client_config: ClientConfig
 
     @property
     def needs_to_track(self) -> bool:
-        return self.publish_on_thread is not None \
-            and not self.force_no_publish
+        return self.publish_on_trend_thread
 
     @property
     def requires_client(self) -> bool:
-        return self.publish_on_thread is not None \
-            or self.check_sage
+        return self.publish_on_trend_thread or self.check_sage
 
 
 @dataclass(frozen=True)
@@ -93,27 +97,22 @@ def parse_args(args: List[str]) -> Arugments:
         help="要报告的日期",
     )
     parser.add_argument(
-        '--publish-on-thread', type=int, default=None,
-        dest='publish_on_thread',
-        help="要发布到的串",
-    )
-    parser.add_argument(
         '--check-sage', action='store_true',
         dest='check_sage',
-        help="是否在发布前检查串有无被下沉",
+        help="是否在发布前检查所要发到的串有无被下沉",
     )
     parser.add_argument(
-        '--notify-thread', type=int, default=None,
-        dest='notify_thread',
-        help="成功发布后要通知的串",
+        '--publish', type=bool, default=False,
+        dest='publish',
+        help="是否要把报告发布到趋势串中",
     )
     parser.add_argument(
-        '--page-capacity', type=int, default=20,
-        dest='page_capacity',
-        help="每页最大能容纳主题串的数量",
+        '--notify-daily-qst', type=bool, default=False,
+        dest='notify_daily_qst_thread',
+        help="是否要通知跑团日报新发布的报告",
     )
     parser.add_argument(
-        '--including', type=str, nargs='+', default=['not_below_q3'],
+        '--including', type=str, nargs='+', default=None,
         dest='including',
         help="主题串包含进报告的条件",
     )
@@ -121,16 +120,6 @@ def parse_args(args: List[str]) -> Arugments:
         '--no-compare', action='store_true',
         dest='no_compare',
         help="报告不要包含与之前的数据的比较",
-    )
-    parser.add_argument(
-        '-c', '--connection-string', type=str, default=None,
-        dest='connection_string',
-        help="数据库连接字符串",
-    )
-    parser.add_argument(
-        '--old-db-path', type=str, default='db.sqlite3',
-        dest='old_db_path',
-        help="DB 所在的路径",
     )
     parser.add_argument(
         '--debugging-scenario', '-D', type=str, default=None,
@@ -141,12 +130,13 @@ def parse_args(args: List[str]) -> Arugments:
     )
 
     parsed = parser.parse_args(args)
+    config = load_config('./config.yaml')
 
     if parsed.target_date is None:
         parsed.target_date = get_target_date()
 
-    if parsed.check_sage or parsed.notify_thread is not None:
-        assert(parsed.publish_on_thread is not None)
+    if parsed.including == None:
+        parsed.including = config.publishing.including
 
     if parsed.including[0] in ['not_below_q2', 'not_below_q3']:
         assert(len(parsed.including) == 1)
@@ -167,58 +157,58 @@ def parse_args(args: List[str]) -> Arugments:
     else:
         assert(False)
 
-    if parsed.connection_string is None:
-        with open('db/password.secret', 'r') as password_file:
-            password = password_file.read().strip()
-        parsed.connection_string = f'dbname=adnmb_qst_watcher user=postgres password={password} host=pi'
-
-    parsed.old_db_path = Path(parsed.old_db_path)
-    if not parsed.old_db_path.exists():
-        print(f"{args.old_db_path} 不存在，将终止")
-        exit(1)
-
     force_slience = False
-    force_no_publish = False
+    notify_trend_thread_instead = False
     s = parsed.debugging_scenario or 'none'
     if s.startswith('preview'):
         # 只预览产生的报告
-        parsed.publish_on_thread = None
         parsed.check_sage = False
+        parsed.publish_on_trend_thread = False
     elif s.startswith('check_sage'):
         # 只执行检查是否下沉
-        assert(parsed.publish_on_thread is not None)
         parsed.check_sage = True
+        parsed.publish_on_trend_thread = False
         force_slience = True
-        force_no_publish = True
     elif s.startswith('publish_only'):
         # 只发布报告
-        assert(parsed.publish_on_thread is not None)
-        parsed.notify_thread = None
         parsed.check_sage = False
+        parsed.publish_on_trend_thread = True
+        parsed.notify_daily_qst_thread = False
     elif s.startswith('notify'):
         # 发布通知，但是会通知到与报告相同的串内
         assert(parsed.publish_on_thread is not None)
-        parsed.notify_thread = parsed.publish_on_thread
+        parsed.publish_on_trend_thread = True
+        notify_trend_thread_instead = True
         parsed.check_sage = False
     else:
         assert(s == 'none')
     if s.endswith('-'):
         parsed.including = Including('top', [1])
 
+    if notify_trend_thread_instead:
+        notify_target = 'trend_thread'
+    else:
+        notify_target = 'daily_qst_thread' if parsed.notify_daily_qst_thread else None
+
     args_obj = Arugments(
         target_date=parsed.target_date,
-        publish_on_thread=parsed.publish_on_thread,
+
         check_sage=parsed.check_sage,
-        notify_thread=parsed.notify_thread,
-        page_capacity=parsed.page_capacity,
+
+        trend_thread_id=config.trend_thread_id,
+        publish_on_trend_thread=parsed.publish,
+        daily_qst_thread_id=config.daily_qst_thread_id,
+        notify_target=notify_target,
+
+        page_capacity=config.publishing.page_capacity,
         including=parsed.including,
         no_compare=parsed.no_compare,
 
-        connection_string=parsed.connection_string,
-        old_db_path=parsed.old_db_path,
+        connection_string=config.database.connection_string,
 
         force_slience=force_slience,
-        force_no_publish=force_no_publish,
+
+        client_config=config.client,
     )
 
     return args_obj
@@ -253,12 +243,12 @@ def main():
     args = parse_args(sys.argv[1:])
 
     if args.requires_client:
-        client = get_client()
+        client = args.client_config.create_client()
     else:
         client = None
 
     if args.needs_to_track:
-        trace = Trace(conn=sqlite3.connect(args.old_db_path),
+        trace = Trace(conn=sqlite3.connect('db.sqlite3'),
                       date=args.target_date, type_='trend')
         attempts = trace.attempts
         if trace.is_done or attempts > 3:
@@ -267,11 +257,11 @@ def main():
 
         logging.config.fileConfig('logging.3_publish_report.conf')
 
-        logging.info(f"开始进行发布报告相关流程。UUID={trace.uuid}")
+        logging.info(f"开始进行发布报告相关流程。UUID={trace.uuid}，数据库=PostgreSQL")
 
     if args.check_sage:
         (trend_thread, _) = client.get_thread_page(
-            args.publish_on_thread, page=1)
+            args.trend_thread_id, page=1)
         if trend_thread.marked_sage:
             logging.warn("趋势串已下沉。本次终止")
 
@@ -282,7 +272,8 @@ def main():
         uuid = None
 
     pages = retrieve_data_then_generate_trend_report_text(
-        old_db_path=args.old_db_path, connection_string=args.connection_string,
+        connection_string=args.connection_string,
+        daily_qst_thread_id=args.daily_qst_thread_id,
         date=args.target_date, uuid=uuid,
         rank_inclusion_method=args.including,
         should_compare_with_last_day=not args.no_compare,
@@ -302,7 +293,7 @@ def main():
     logging.info(f"报告文本页数：{len(pages)}")
 
     trace.report_thread_id_and_reply_count(
-        thread_id=args.publish_on_thread,
+        thread_id=args.trend_thread_id,
         reply_count=len(pages)
     )
     first_rount = True
@@ -321,7 +312,7 @@ def main():
         (title, name, content) = pages[post.report_page_number-1]
 
         try:
-            client.reply_thread(content, to_thread_id=args.publish_on_thread,
+            client.reply_thread(content, to_thread_id=args.trend_thread_id,
                                 title=title, name=name)
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
             logging.warning("请求服务器超时，将尝试检查是否成功发串")
@@ -339,7 +330,7 @@ def main():
 
         logging.info(f"将查找属于本页报告的回应")
 
-        found_post = find_last_post_with_uuid(client, args.publish_on_thread)
+        found_post = find_last_post_with_uuid(client, args.trend_thread_id)
         if found_post is None:
             logging.error("未找到任何带有 UUID 回应，本次终止")
             exit(1)
@@ -362,9 +353,14 @@ def main():
 
     logging.info("已发送各页报告且找到报告各页对应的各回应")
 
-    if args.notify_thread is not None:
+    if args.notify_target is not None:
         # TODO: 检查成功与否
-        notify_to_thread_id = args.notify_thread
+
+        if args.notify_target == 'daily_qst_thread':
+            notify_to_thread_id = args.daily_qst_thread_id
+        else:
+            assert(args.notify_target == 'trend_thread')
+            notify_to_thread_id = args.trend_thread_id
         logging.info(f"将发送报告出炉通知。由于发串间隔限制，将等待30秒")
         sleep(30)
 
@@ -449,7 +445,8 @@ def find_last_post_with_uuid(client: anobbsclient.Client, thread_id: int) -> Opt
 
 
 def retrieve_data_then_generate_trend_report_text(
-    old_db_path: Path, connection_string: str,
+    connection_string: str,
+    daily_qst_thread_id: int,
     date: datetime, uuid: str,
     rank_inclusion_method: Including,
     should_compare_with_last_day: bool,
@@ -459,6 +456,7 @@ def retrieve_data_then_generate_trend_report_text(
             db = DB(cur=cur)
             return TrendReportTextGenerator(
                 db=db,
+                daily_qst_thread_id=daily_qst_thread_id,
                 date=date,
                 rank_inclusion_method=rank_inclusion_method,
                 rank_page_capacity=RANK_PAGE_CAPACITY,
@@ -471,6 +469,8 @@ def retrieve_data_then_generate_trend_report_text(
 class TrendReportTextGenerator:
 
     db: DB
+
+    daily_qst_thread_id: int
 
     date: datetime
     rank_inclusion_method: Including
@@ -553,9 +553,9 @@ class TrendReportTextGenerator:
         ])
 
     def _generate_daily_qst_reference(self) -> Optional[str]:
-        if DAILY_QST_THREAD_ID is None:
+        if self.daily_qst_thread_id is None:
             return None
-        daily_qst = self.db.get_daily_qst(self.date, DAILY_QST_THREAD_ID)
+        daily_qst = self.db.get_daily_qst(self.date, self.daily_qst_thread_id)
         if daily_qst is None:
             return None
         return '\n'.join([

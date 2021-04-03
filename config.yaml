@@ -1,0 +1,27 @@
+consts:
+  # 跑团版的版块 id
+  board-id: 111
+
+  # 报告要发往的趋势串的串号
+  trend-thread-id: 35945138 # 正式串
+  # trend-thread-id: 35783128 # 测试串
+
+  # 跑团日报串号。趋势报告发布之后会通知这里；此外报告中也会包含当天日报回应的串号
+  daily-qst-thread-id: 20311039
+
+database:
+  host: pi
+  dbname: adnmb_qst_watcher
+  user: postgres
+  password-file: ./db/password.secret
+
+client:
+  file: ./client.yaml
+
+publishing:
+  # 每页报告包含的串数
+  page-capacity: 15
+
+  # 涵盖范围
+  # 可以被命令行选项覆盖
+  including: [not_below_q2]
