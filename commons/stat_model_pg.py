@@ -2,11 +2,11 @@ from typing import Optional, Union, Tuple, List, Dict, OrderedDict
 from dataclasses import dataclass
 
 from datetime import datetime, timedelta, date
-import re
 import statistics
 
 from bs4 import BeautifulSoup, Tag
 import psycopg2
+import regex
 
 import anobbsclient
 
@@ -39,8 +39,10 @@ class ThreadStats:
         return BeautifulSoup(self.raw_content, features='html.parser').get_text()
 
     @staticmethod
-    def insert_zwsps_everywhere(text: str) -> str:
-        return ZWSP.join(list(text))
+    def insert_zwsps_between_chinese_characters(text: str) -> str:
+        def insert_zwsps_fn(match_obj):
+            return ZWSP.join(list(match_obj.group(0)))
+        return regex.sub(r'\p{han}+', insert_zwsps_fn, text)
 
     def generate_summary(self, free_lines: int) -> str:
         # TODO: 其实插入 zwsp 放外部更合适？
@@ -50,13 +52,15 @@ class ThreadStats:
             if len(title) > 15:  # 以防万一
                 title = title[:14] + OMITTING
             free_lines -= 1
-            lines += [f"标题：{ThreadStats.insert_zwsps_everywhere(title)}"]
+            lines += [
+                f"标题：{ThreadStats.insert_zwsps_between_chinese_characters(title)}"]
         if self.name is not None:
             name = self.name.replace(ZWSP, '')
             if len(name) > 15:  # 以防万一
                 name = name[:14] + OMITTING
             free_lines -= 1
-            lines += [f"名称：{ThreadStats.insert_zwsps_everywhere(name)}"]
+            lines += [
+                f"名称：{ThreadStats.insert_zwsps_between_chinese_characters(name)}"]
         for content_line in self.content.split('\n'):
             if free_lines == 0:
                 lines += [OMITTING]
@@ -69,7 +73,8 @@ class ThreadStats:
                     break
                 line_to_add += line_part.replace(ZWSP, '')
                 free_lines -= 1
-            lines += [ThreadStats.insert_zwsps_everywhere(line_to_add)]
+            lines += [
+                ThreadStats.insert_zwsps_between_chinese_characters(line_to_add)]
         while True:
             if lines[-1].strip() == "":
                 lines.pop()

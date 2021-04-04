@@ -29,7 +29,7 @@ from commons.stat_model_pg import ThreadStats, Counts, Stats, DB
 from commons.debugging import super_huge_thread_pg
 
 
-FORMAT_VERSION = '2.0'
+FORMAT_VERSION = '3.0'
 CHARACTER_COUNT_METHOD_VERSION = '2'
 CHARACTER_COUNT_METHOD_EXPLANATION = "除换行与一般空白外字符的个数"
 
