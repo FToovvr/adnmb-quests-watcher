@@ -58,15 +58,20 @@ CREATE FUNCTION get_daily_threads_report(
             count_content_characters_works(content) AS content_character_count
         FROM post
         WHERE in_boundaries(post.created_at, _lower_bound, _upper_bound)
+        UNION
+        SELECT
+            id,
+            id, user_id,
+            count_content_characters_works(content) AS content_character_count
+        FROM thread
+        WHERE in_boundaries(thread.created_at, _lower_bound, _upper_bound)
     )
     SELECT
 
         current_thread.id,
         current_thread.created_at,
         in_boundaries(current_thread.created_at, _lower_bound, _upper_bound) AS is_new,
-        -- CASE WHEN current_thread.is_disappeared THEN
-        --     CASE WHEN current_thread.updated_at < _upper_bound THEN TRUE ELSE FALSE END
-        -- ELSE FALSE END AS is_disappeared,
+        -- 这一项就不还原当时情况了
         current_thread.is_disappeared,
 
         current_thread.title,
@@ -76,15 +81,20 @@ CREATE FUNCTION get_daily_threads_report(
         current_thread.current_reply_count - (
             SELECT COUNT(id) FROM post
             WHERE post.parent_thread_id = current_thread.id 
-                AND created_at >= _upper_bound) AS total_response_count,
-        COUNT(new_post.id) AS increased_response_count,
-        SUM(CASE WHEN current_thread.user_id = new_post.user_id THEN 1 ELSE 0 END) AS increased_response_count_by_po,
-        COUNT(DISTINCT new_post.user_id) AS distinct_cookie_count,
+                AND created_at >= _upper_bound)
+            AS total_response_count,
+        COUNT(new_post.id)
+            - CASE WHEN in_boundaries(current_thread.created_at, _lower_bound, _upper_bound) THEN 1 ELSE 0 END
+            AS increased_response_count,
+        SUM(CASE WHEN current_thread.user_id = new_post.user_id THEN 1 ELSE 0 END)
+            - CASE WHEN in_boundaries(current_thread.created_at, _lower_bound, _upper_bound) THEN 1 ELSE 0 END
+            AS increased_response_count_by_po,
+        -- 之前如果是新串而 po 只发串而没回应的话，会少算一块 po 的饼干
+        COUNT(DISTINCT new_post.user_id)
+            AS distinct_cookie_count,
         SUM(new_post.content_character_count)
-            + CASE WHEN in_boundaries(current_thread.created_at, _lower_bound, _upper_bound) THEN count_content_characters_works(current_thread.content) ELSE 0 END
             AS increased_character_count,
         SUM(CASE WHEN current_thread.user_id = new_post.user_id THEN new_post.content_character_count ELSE 0 END)
-            + CASE WHEN in_boundaries(current_thread.created_at, _lower_bound, _upper_bound) THEN count_content_characters_works(current_thread.content) ELSE 0 END
             AS increased_character_count_by_po,
 
         extract_blue_texts(current_thread.content) AS blue_texts,
@@ -107,7 +117,7 @@ CREATE FUNCTION get_daily_threads_report(
         LEFT JOIN thread_extra ON thread_extra.id = thread.id
         WHERE EXISTS(SELECT id FROM new_post WHERE new_post.parent_thread_id = thread.id)
         GROUP BY thread.id
-    ) AS current_thread ON current_thread.id = new_post.parent_thread_id
+    ) AS current_thread ON current_thread.id = new_post.parent_thread_id -- 这里的 "current" 其实指的是"当时"
     -- TODO: 有办法把 current_thread.id 之外的去掉吗？
     GROUP BY current_thread.id, current_thread.created_at, current_thread.user_id, current_thread.title, current_thread.name, current_thread.content, current_thread.updated_at, current_thread.is_disappeared, current_thread.current_reply_count
     ORDER BY increased_response_count DESC;
