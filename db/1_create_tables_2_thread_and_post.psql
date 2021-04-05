@@ -1,70 +1,106 @@
-CREATE TABLE post_base (
-    id          integer,
+CREATE TABLE post (
+    -- 串号
+    id  integer,
+    -- 只有是 thread 时不为 NULL
+    parent_board_id     integer,
+    -- 只有是 response 时不为 NULL
+    -- 就不检查是否存在了
+    parent_thread_id    integer,
+
+    -- 至少从这个时间起是此版本的内容。
+    -- 不存在 thread_extra 是因为同一个版本此值不会改变
+    effective_at_least_from timestamptz,
+
     created_at  timestamptz NOT NULL,
     -- 照顾 thread_old_revision，不设为 NOT NULL
     user_id     text        NOT NULL,
 
-    content                 text     NOT NULL,
+    content                 text    NOT NULL,
     attachment_base         text,
     attachment_extension    text,
     name                    text,
     email                   text,
     title                   text,
 
-    misc_fields             jsonb
+    misc_fields             jsonb,
+
+    PRIMARY KEY (id),
+    CHECK (
+        (parent_board_id IS NOT NULL AND parent_thread_id IS NULL)
+        OR (parent_board_id IS NULL AND parent_thread_id IS NOT NULL)
+    )
 );
 
-CREATE TABLE thread (
-    PRIMARY KEY (id)
-) INHERITS (post_base);
-
-CREATE INDEX idx__thread_user_id
-    ON thread(user_id);
-CREATE UNIQUE INDEX idx__thread__created_at__id
-    ON thread(created_at, id);
-
-CREATE TABLE thread_old_revision (
-
-    -- 至少在这个时点之后就与这个版本的内容有不同了
-    expired_before  timestamptz NOT NULL,
-
-    -- 旧版只记载了正文、名称、邮箱地址和标题的变化，其他列都是假定没有变化而补上去的
-    is_not_complete BOOLEAN DEFAULT FALSE,
-
-    -- 从实用角度出发，不可能有两次修改在同一秒
-    PRIMARY KEY (id, expired_before),
-    FOREIGN KEY (id) REFERENCES thread (id)
-) INHERITS (post_base);
-
-CREATE INDEX idx__thread_old_revision__expired_before
-    ON thread_old_revision (expired_before);
+CREATE INDEX idx___post___user_id
+    ON post(user_id);
+CREATE UNIQUE INDEX idx___post___created_at__id
+    ON post(created_at, id);
+CREATE UNIQUE INDEX idx___post___parent_board_id__id
+    ON post(parent_board_id, id);
+CREATE UNIQUE INDEX idx___post___parent_board_id__created_at__id
+    ON post(parent_board_id, created_at, id);
+CREATE UNIQUE INDEX idx___post___parent_thread_id__id
+    ON post(parent_thread_id, id);
+CREATE UNIQUE INDEX idx___post___parent_thread_id__created_at__id
+    ON post(parent_thread_id, created_at, id);
 
 CREATE TABLE thread_extra (
     id          integer,
-    
+
     -- 如果串消失了，则这里保留较早的时间；否则保留最新的时间
-    updated_at  timestamptz,
+    updated_at          timestamptz,
 
     -- 如果串消失了，这里则是最后见到时的总回应数
     current_reply_count integer,
 
     is_disappeared      boolean DEFAULT FALSE,
 
-    has_blue_texts                  boolean,
-    completion_registry_post_ids    integer[],
+    has_blue_texts                      boolean,
+    completion_registry_responses_id    integer[],
 
     PRIMARY KEY (id),
-    FOREIGN KEY (id) REFERENCES thread (id)
+    FOREIGN KEY (id) REFERENCES post (id)
 );
 
-CREATE TABLE post (
-    parent_thread_id        integer     NOT NULL,
+CREATE VIEW thread AS
+    SELECT post.id, effective_at_least_from, parent_board_id, created_at, user_id, content, attachment_base, attachment_extension, name, email, title, misc_fields,
+        updated_at, current_reply_count, is_disappeared, has_blue_texts, completion_registry_responses_id
+    FROM post
+    LEFT JOIN thread_extra ON thread_extra.id = post.id
+    WHERE parent_board_id IS NOT NULL;
 
-    PRIMARY KEY (id),
-    FOREIGN KEY (parent_thread_id) REFERENCES thread(id)
-) INHERITS (post_base);
+CREATE VIEW response AS
+    SELECT post.id, effective_at_least_from, parent_thread_id, created_at, user_id, content, attachment_base, attachment_extension, name, email, title, misc_fields
+    FROM post
+    WHERE parent_thread_id IS NOT NULL;
 
-CREATE UNIQUE INDEX idx__post__parent_thread_id__id
-    ON post(parent_thread_id, id);
-CREATE UNIQUE INDEX idx__post__parent_thread_id__created_at__id
-    ON post(parent_thread_id, created_at, id);
+CREATE TABLE thread_old_revision (
+    id                      integer,
+    -- 至少从这个时间起是此版本的内容
+    effective_at_least_from timestamptz,
+
+    parent_board_id         integer     NOT NULL,
+    created_at              timestamptz NOT NULL,
+    user_id                 text        NOT NULL,
+    content                 text        NOT NULL,
+    attachment_base         text,
+    attachment_extension    text,
+    name                    text,
+    email                   text,
+    title                   text,
+    misc_fields             jsonb,
+
+    -- 旧版只记载了正文、名称、邮箱地址和标题的变化，其他列都是假定没有变化而补上去的
+    is_not_complete BOOLEAN DEFAULT FALSE,
+
+    -- 从实用角度出发，不可能有两次修改在同一秒
+    PRIMARY KEY (id, effective_at_least_from),
+    FOREIGN KEY (id) REFERENCES post (id)
+);
+
+CREATE VIEW thread_revision AS
+    SELECT id, effective_at_least_from, parent_board_id, created_at, user_id, content, attachment_base, attachment_extension, name, email, title, misc_fields, FALSE AS is_not_complete
+    FROM thread
+    UNION
+    SELECT *
+    FROM thread_old_revision;

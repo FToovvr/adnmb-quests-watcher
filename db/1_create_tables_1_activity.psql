@@ -34,7 +34,7 @@ CREATE TABLE activity (
     PRIMARY KEY (id)
 );
 
-CREATE INDEX idx__activity__run_at
+CREATE INDEX idx___activity___run_at
     ON activity(run_at);
-CREATE INDEX idx__activity__is_successful__run_before
+CREATE INDEX idx___activity___is_successful__run_before
     ON activity(is_successful, ensured_fetched_until);

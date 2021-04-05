@@ -1,5 +1,56 @@
-CREATE PROCEDURE record_thread(
+CREATE PROCEDURE update_thread_extra(
+    in _id                  integer,
+    in _updated_at          timestamptz,
+    in _current_reply_count integer,
+    in _content             text
+) AS $$
+    DECLARE
+        _blue_texts xml[];
+    BEGIN
+        INSERT INTO thread_extra (id, updated_at, current_reply_count)
+        VALUES (_id, _updated_at, _current_reply_count)
+        ON CONFLICT (id) DO
+        UPDATE SET
+            updated_at = EXCLUDED.updated_at,
+            current_reply_count = COALESCE(EXCLUDED.current_reply_count, thread_extra.current_reply_count);
+
+        _blue_texts := extract_blue_texts(_content);
+        IF _blue_texts IS NOT NULL THEN
+            UPDATE thread_extra
+            SET has_blue_texts = TRUE
+            WHERE id = _id;
+        END IF;
+    END;
+    $$ LANGUAGE plpgsql;
+
+CREATE PROCEDURE update_completion_registry_responses_id_for_threads(
+    in _id      integer,
+    in _content text
+) AS $$
+    DECLARE
+        _registered_completed_thread_ids integer[];
+        _registered_completed_thread_id  integer;
+    BEGIN
+        -- XXX: 没考虑因修改而 post_id 重复或对应的内容不再包含对应的串号的情况
+        _registered_completed_thread_ids := ARRAY(
+            SELECT (regexp_matches(_content, '(?:No\.|/t/)(\d+)', 'g'))[1]::integer
+        );
+        FOREACH _registered_completed_thread_id IN ARRAY _registered_completed_thread_ids
+        LOOP
+            INSERT INTO thread_extra (id, completion_registry_responses_id)
+            VALUES (_registered_completed_thread_id, ARRAY[_id])
+            ON CONFLICT (id) DO
+            UPDATE SET completion_registry_responses_id
+                = array_append(COALESCE(thread_extra.completion_registry_responses_id, ARRAY[]::integer[]), _id);
+        END LOOP;
+    END;
+    $$ LANGUAGE plpgsql;
+
+CREATE PROCEDURE record_post(
     in _id                      integer,
+    in _is_thread               boolean,
+    in _parent_id               integer,
+
     in _created_at              timestamptz,
     in _user_id                 text,
     in _content                 text,
@@ -14,48 +65,67 @@ CREATE PROCEDURE record_thread(
     in _updated_at              timestamptz
 ) AS $$
     DECLARE
-        _blue_texts xml[];
+        _should_insert boolean;
     BEGIN
         IF NOT current_setting('fto.MIGRATING')::boolean THEN
-            IF _updated_at IS NULL THEN
-                RAISE EXCEPTION '_updated_at must not be null';
+            IF _is_thread AND _updated_at IS NULL THEN
+                RAISE EXCEPTION '_updated_at must not be null when records thread';
             END IF;
         END IF;
 
-        IF EXISTS(SELECT thread.id FROM thread WHERE thread.id = _id)
-            AND NOT EXISTS(
-                SELECT thread.id FROM thread
-                WHERE thread.id = _id AND thread.created_at = _created_at AND thread.user_id = _user_id AND thread.content = _content
-                    AND thread.attachment_base = _attachment_base AND thread.attachment_extension = _attachment_extension
-                    AND thread.name = _name AND thread.email = _email AND thread.title = _title AND thread.misc_fields = _misc_fields
-            ) THEN
-            INSERT INTO thread_old_revision (
-                id, created_at, user_id, content,
-                attachment_base, attachment_extension,
-                name, email, title, misc_fields,
-                expired_before,
-                is_not_complete
-            ) SELECT 
-                thread.id, thread.created_at, thread.user_id, thread.content,
-                thread.attachment_base, thread.attachment_extension,
-                thread.name, thread.email, thread.title, thread.misc_fields,
-                _updated_at,
-                current_setting('fto.MIGRATING')::boolean
-            FROM thread
-            WHERE thread.id = _id;
+        _should_insert := TRUE;
+        IF _is_thread THEN -- 暂时只为主串记录历史版本
+            IF EXISTS(SELECT thread.id FROM thread WHERE thread.id = _id) THEN
+                IF EXISTS(
+                    SELECT thread.id FROM thread
+                    -- parent_thread_id、effective_at_least_from 之外的全部
+                    WHERE thread.id = _id AND thread.parent_board_id = _parent_id AND thread.created_at = _created_at
+                        AND thread.user_id = _user_id AND thread.content = _content
+                        AND thread.attachment_base = _attachment_base AND thread.attachment_extension = _attachment_extension
+                        AND thread.name = _name AND thread.email = _email AND thread.title = _title AND thread.misc_fields = _misc_fields
+                ) THEN
+                    -- 内容未发生改变，只更新 thread_extra 即可
+                    _should_insert := FALSE;
+                ELSE -- 当前主串的内容与所存储的内容不完全一致
+                    INSERT INTO thread_old_revision (
+                        id, effective_at_least_from,
+                        parent_board_id, created_at, user_id, content,
+                        attachment_base, attachment_extension,
+                        name, email, title, misc_fields,
+                        is_not_complete
+                    ) SELECT 
+                        thread.id, thread.effective_at_least_from,
+                        thread.parent_board_id, thread.created_at, thread.user_id, thread.content,
+                        thread.attachment_base, thread.attachment_extension,
+                        thread.name, thread.email, thread.title, thread.misc_fields,
+                        -- 迁移过来的这部分的历史版本是不完整的
+                        current_setting('fto.MIGRATING')::boolean
+                    FROM thread
+                    WHERE thread.id = _id;
+                END IF;
+            END IF;
         END IF;
 
-        INSERT INTO thread (
-            id, created_at, user_id, content,
-            attachment_base, attachment_extension,
-            name, email, title, misc_fields
-        ) VALUES (
-            _id, _created_at, _user_id, _content,
-            _attachment_base, _attachment_extension,
-            _name, _email, _title, _misc_fields
-        )
-        ON CONFLICT (id) DO
-            UPDATE SET
+        IF _should_insert THEN
+            INSERT INTO post (
+                id, effective_at_least_from,
+                parent_board_id,
+                parent_thread_id,
+                created_at, user_id, content,
+                attachment_base, attachment_extension,
+                name, email, title, misc_fields
+            ) VALUES (
+                _id, _updated_at,
+                CASE WHEN _is_thread THEN _parent_id ELSE NULL END,
+                CASE WHEN _is_thread THEN NULL ELSE _parent_id END,
+                _created_at, _user_id, _content,
+                _attachment_base, _attachment_extension,
+                _name, _email, _title, _misc_fields
+            )
+            ON CONFLICT (id) DO
+            UPDATE SET -- 不更新 effective_at_least_from
+                parent_board_id = CASE WHEN _is_thread THEN _parent_id ELSE NULL END,
+                parent_thread_id = CASE WHEN _is_thread THEN NULL ELSE _parent_id END,
                 created_at = EXCLUDED.created_at,
                 user_id = EXCLUDED.user_id,
                 content = EXCLUDED.content,
@@ -65,19 +135,14 @@ CREATE PROCEDURE record_thread(
                 email = EXCLUDED.email,
                 title = EXCLUDED.title,
                 misc_fields = EXCLUDED.misc_fields;
+        END IF;
 
-        INSERT INTO thread_extra (id, updated_at, current_reply_count)
-        VALUES (_id, _updated_at, _current_reply_count)
-        ON CONFLICT (id) DO
-            UPDATE SET
-                updated_at = EXCLUDED.updated_at,
-                current_reply_count = EXCLUDED.current_reply_count;
-
-        _blue_texts := extract_blue_texts(_content);
-        IF _blue_texts IS NOT NULL THEN
-            UPDATE thread_extra
-            SET has_blue_texts = TRUE
-            WHERE id = _id;
+        IF _is_thread THEN
+            CALL update_thread_extra(_id, _updated_at, _current_reply_count, _content);
+        ELSE
+            IF _parent_id = current_setting('fto.COMPLETION_REGISTRY_THREAD_ID')::integer THEN
+                CALL update_completion_registry_responses_id_for_threads(_id, _content);
+            END IF;
         END IF;
 
     END;
@@ -93,4 +158,55 @@ CREATE PROCEDURE report_is_thread_disappeared(
         is_disappeared = _is_disappeared,
         updated_at = CASE WHEN is_disappeared AND _is_disappeared THEN updated_at ELSE _updated_at END
     WHERE id = _thread_id;
+    $$ LANGUAGE sql;
+
+CREATE PROCEDURE record_thread(
+    in _id                      integer,
+    in _parent_board_id         integer,
+
+    in _created_at              timestamptz,
+    in _user_id                 text,
+    in _content                 text,
+    in _attachment_base         text,
+    in _attachment_extension    text,
+    in _name                    text,
+    in _email                   text,
+    in _title                   text,
+    in _misc_fields             jsonb,
+
+    in _current_reply_count     integer,
+    in _updated_at              timestamptz
+) AS $$
+    CALL record_post(
+        _id, TRUE, _parent_board_id,
+        _created_at, _user_id, _content,
+        _attachment_base, _attachment_extension,
+        _name, _email, _title, _misc_fields,
+        _current_reply_count, _updated_at
+    );
+    $$ LANGUAGE sql;
+
+CREATE PROCEDURE record_response(
+    in _id                      integer,
+    in _parent_thread_id        integer,
+
+    in _created_at              timestamptz,
+    in _user_id                 text,
+    in _content                 text,
+    in _attachment_base         text,
+    in _attachment_extension    text,
+    in _name                    text,
+    in _email                   text,
+    in _title                   text,
+    in _misc_fields             jsonb,
+
+    in _updated_at              timestamptz
+) AS $$
+    CALL record_post(
+        _id, FALSE, _parent_thread_id,
+        _created_at, _user_id, _content,
+        _attachment_base, _attachment_extension,
+        _name, _email, _title, _misc_fields,
+        NULL, _updated_at
+    );
     $$ LANGUAGE sql;

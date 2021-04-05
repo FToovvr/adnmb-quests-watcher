@@ -1,0 +1,30 @@
+CREATE FUNCTION in_boundaries(in _time timestamptz, in _lower_bound timestamptz, in _upper_bound timestamptz)
+    RETURNS boolean AS $$
+        SELECT _time >= _lower_bound AND _time < _upper_bound;
+    $$ LANGUAGE sql;
+
+CREATE FUNCTION thread_revisions_betwwen(
+    in _thread_id    integer,
+    in _lower_bound  timestamptz,
+    in _upper_bound  timestamptz
+) RETURNS SETOF thread_old_revision AS $$
+    SELECT *
+    FROM thread_revision
+    WHERE id = _thread_id AND in_boundaries(effective_at_least_from, _lower_bound, _upper_bound)
+    UNION (
+    SELECT *
+    FROM thread_revision
+    WHERE id = _thread_id AND effective_at_least_from < _lower_bound OR effective_at_least_from IS NULL
+    ORDER BY effective_at_least_from IS NOT NULL DESC, effective_at_least_from DESC
+    LIMIT 1); -- LIMIT 1 优先级低…
+    $$ LANGUAGE sql;
+
+CREATE FUNCTION thread_latest_revision_before(
+    in _thread_id   integer,
+    in _time        timestamptz
+) RETURNS SETOF thread_old_revision AS $$
+    SELECT *
+    FROM thread_revisions_betwwen(_thread_id, to_timestamp(0), _time)
+    ORDER BY effective_at_least_from IS NOT NULL DESC, effective_at_least_from DESC
+    LIMIT 1;
+    $$ LANGUAGE sql;

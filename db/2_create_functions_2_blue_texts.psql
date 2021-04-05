@@ -1,4 +1,4 @@
-CREATE FUNCTION extract_blue_texts(in content text)
+CREATE FUNCTION extract_blue_texts(in _content text)
     RETURNS xml[] AS $$
     DECLARE
         _wrapped_content text;
@@ -7,7 +7,7 @@ CREATE FUNCTION extract_blue_texts(in content text)
         _attr text;
         _blue_texts xml[];
     BEGIN
-        _wrapped_content := concat('<article>', content, '</article>');
+        _wrapped_content := concat('<article>', _content, '</article>');
         IF NOT xml_is_well_formed_content(_wrapped_content) THEN
             RETURN NULL;
         END IF;
@@ -32,53 +32,6 @@ CREATE FUNCTION extract_blue_texts(in content text)
         END IF;
     END;
     $$ LANGUAGE plpgsql;
-
-CREATE FUNCTION thread_last_revision(in _id integer)
-    RETURNS SETOF thread_old_revision AS $$
-    SELECT *
-    FROM thread_old_revision 
-    WHERE thread_old_revision.id = _id
-    ORDER BY expired_before DESC
-    LIMIT 1;
-    $$ LANGUAGE sql;
-
-CREATE FUNCTION thread_revisions_betwwen(
-    in _thread_id    integer,
-    in _lower_bound  timestamptz,
-    in _upper_bound  timestamptz
-) RETURNS SETOF thread_old_revision AS $$
-    WITH revisions AS (
-        SELECT *
-        FROM thread_old_revision
-        WHERE id = _thread_id
-        UNION
-        SELECT *,
-            now(), -- 对应 expired_before，保证是其中的最大值
-            FALSE
-        FROM thread
-        WHERE id = _thread_id
-    )
-    SELECT *
-    FROM revisions
-    WHERE expired_before >= _lower_bound AND expired_before < _upper_bound
-    UNION (
-    SELECT id, created_at, user_id, content, attachment_base, attachment_extension, name, email, title, misc_fields,
-        CASE WHEN expired_before = now() THEN NULL ELSE expired_before END AS expired_before, is_not_complete
-    FROM revisions
-    WHERE expired_before >= _upper_bound
-    ORDER BY expired_before ASC
-    LIMIT 1) -- LIMIT 1 优先级低…
-    $$ LANGUAGE sql;
-
-CREATE FUNCTION thread_latest_revision_before(
-    in _thread_id   integer,
-    in _time        timestamptz
-) RETURNS SETOF thread_old_revision AS $$
-        SELECT *
-        FROM thread_revisions_betwwen(_thread_id, to_timestamp(0), _time)
-        ORDER BY expired_before IS NULL DESC, expired_before DESC
-        LIMIT 1;
-    $$ LANGUAGE sql;
 
 CREATE FUNCTION thread_got_new_blue_texts_between(
     in _thread_id    integer,

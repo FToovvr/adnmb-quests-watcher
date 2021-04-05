@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 
+from typing import Optional
+
 import sys
+import json
 
 import sqlite3
 import psycopg2
@@ -9,6 +12,9 @@ from datetime import datetime, date
 from dateutil import tz
 
 local_tz = tz.gettz('Asia/Shanghai')
+
+
+QST_BOARD_ID = 111
 
 
 def ts2dt(ts):
@@ -41,9 +47,9 @@ def main():
             for migrate_fn in [
                 migrate_activity_table,
                 migrate_thread_table,
-                migrate_post_table,
                 migrate_publishing_trace,
                 migrate_published_post,
+                migrate_post_table,
             ]:
                 print(f"start: {migrate_fn.__name__}")
                 migrate_fn(conn_s3, cur_pg)
@@ -73,6 +79,33 @@ def migrate_activity_table(conn_s3: sqlite3.Connection, cur_pg: psycopg2._psycop
         ))
 
 
+def remove_fid_field(misc_fields: Optional[str]) -> Optional[str]:
+    if misc_fields is None:
+        return None
+    misc_fields = json.loads(misc_fields)
+    misc_fields.pop('fid', None)
+    if len(misc_fields) == 0:
+        return None
+    else:
+        return json.dumps(misc_fields)
+
+
+def find_updated_at(conn_s3: sqlite3.Connection, id: int, updated_at: Optional[datetime]) -> datetime:
+    if updated_at:
+        return updated_at
+
+    row = conn_s3.execute(r'''
+        SELECT ensured_fetched_until FROM activity
+        WHERE ensured_fetched_until > COALESCE(
+            (SELECT created_at FROM post WHERE parent_thread_id = ? ORDER BY id ASC),
+            (SELECT created_at FROM thread WHERE id = ?)
+        )
+        ORDER BY ensured_fetched_until ASC
+        LIMIT 1
+    ''', (id, id)).fetchone()
+    return ts2dt(row[0])
+
+
 def migrate_thread_table(conn_s3: sqlite3.Connection, cur_pg: psycopg2._psycopg.cursor):
 
     last = [None, None]
@@ -96,10 +129,13 @@ def migrate_thread_table(conn_s3: sqlite3.Connection, cur_pg: psycopg2._psycopg.
         updated_at = None
         if last[0] == id:
             updated_at = ts2dt(last[1])
+        else:
+            updated_at = find_updated_at(conn_s3, id, None)
+        misc_fields = remove_fid_field(misc_fields)
         cur_pg.execute(r'''
-            CALL record_thread(''' + ', '.join([r'%s']*12) + r''')
+            CALL record_thread(''' + ', '.join([r'%s']*13) + r''')
             ''', (
-            id, ts2dt(created_at), user_id, content,
+            id, QST_BOARD_ID, ts2dt(created_at), user_id, content,
             attachment_base, attachment_extension,
             name, email, title, misc_fields,
             None,
@@ -122,14 +158,15 @@ def migrate_thread_table(conn_s3: sqlite3.Connection, cur_pg: psycopg2._psycopg.
             LEFT JOIN thread_old_revision ON thread.id = thread_old_revision.id
             GROUP BY thread.id
         '''):
+        misc_fields = remove_fid_field(misc_fields)
         cur_pg.execute(r'''
-            CALL record_thread(''' + ', '.join([r'%s']*12) + r''')
+            CALL record_thread(''' + ', '.join([r'%s']*13) + r''')
             ''', (
-            id, ts2dt(created_at), user_id, content,
+            id, QST_BOARD_ID, ts2dt(created_at), user_id, content,
             attachment_base, attachment_extension,
             name, email, title, misc_fields,
             current_reply_count,
-            ts2dt(current_revision_checked_at),
+            find_updated_at(conn_s3, id, ts2dt(current_revision_checked_at)),
         ))
         cur_pg.execute(r'''
             CALL report_is_thread_disappeared(%s, %s, %s)
@@ -144,12 +181,12 @@ def migrate_post_table(conn_s3: sqlite3.Connection, cur_pg: psycopg2._psycopg.cu
         name, email, title, misc_fields,
     ] in enumerate(conn_s3.execute(r'SELECT * FROM post')):
         cur_pg.execute(r'''
-            CALL record_post(''' + ', '.join([r'%s']*11) + r''')
+            CALL record_response(''' + ', '.join([r'%s']*12) + r''')
             ''', (
-            parent_thread_id,
-            id, ts2dt(created_at), user_id, content,
+            id, parent_thread_id, ts2dt(created_at), user_id, content,
             attachment_base, attachment_extension,
             name, email, title, misc_fields,
+            None,
         ))
         if i % 100 == 0:
             print(f"{i+1}/{n}")
@@ -160,7 +197,7 @@ def migrate_publishing_trace(conn_s3: sqlite3.Connection, cur_pg: psycopg2._psyc
         id, _date, _type, uuid, attempts, to_thread_id
     ] in conn_s3.execute(r'SELECT * FROM publishing_trace'):
         cur_pg.execute(r'''
-            INSERT INTO publishing_trace
+            INSERT INTO publication_record
             VALUES (''' + ', '.join([r'%s']*6) + r''')
             ON CONFLICT DO NOTHING
             ''', (
@@ -173,7 +210,7 @@ def migrate_published_post(conn_s3: sqlite3.Connection, cur_pg: psycopg2._psycop
         id, trace_id, page_number, reply_post_id, reply_offset,
     ] in conn_s3.execute(r'SELECT * FROM published_post'):
         cur_pg.execute(r'''
-            INSERT INTO published_post
+            INSERT INTO publication_page
             VALUES (''' + ', '.join([r'%s']*5) + r''')
             ON CONFLICT DO NOTHING
             ''', (

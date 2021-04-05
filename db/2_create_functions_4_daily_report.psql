@@ -1,37 +1,9 @@
-CREATE FUNCTION remove_all_spaces(in _content text)
-    RETURNS text AS $$
-        SELECT regexp_replace(_content, '[\s\xa0]', '', 'g');
-    $$ LANGUAGE sql;
-
--- 原来的版本太慢了，由于要转义的内容结果都是一个字符，就直接替换成 `x` 了。
--- 4.5s~4.6s -> 1.5s~1.6s.
--- it works
-CREATE FUNCTION count_content_characters_works(in _content text)
-    RETURNS integer AS $$
-    DECLARE
-        _wrapped_content text;
-    BEGIN
-        _wrapped_content := concat('<article>', _content, '</article>');
-        IF NOT xml_is_well_formed_content(_wrapped_content) THEN
-            RETURN LENGTH(_content);
-        END IF;
-
-        RETURN (
-            SELECT LENGTH(REGEXP_REPLACE(string_agg(unnest::text, ''), '&.+?;', 'x'))
-            FROM unnest(xpath('/*//text()', _wrapped_content::xml)));
-    END
-    $$ LANGUAGE plpgsql;
-
-CREATE FUNCTION in_boundaries(in _time timestamptz, in _lower_bound timestamptz, in _upper_bound timestamptz)
-    RETURNS boolean AS $$
-        SELECT _time >= _lower_bound AND _time < _upper_bound;
-    $$ LANGUAGE sql;
-
 CREATE FUNCTION get_daily_threads_report(
     in _lower_bound timestamptz,
     in _upper_bound timestamptz
 ) RETURNS TABLE (
     id              integer,
+    parent_board_id integer,
     created_at      timestamptz,
     is_new          boolean,
     is_disappeared  boolean,
@@ -53,22 +25,16 @@ CREATE FUNCTION get_daily_threads_report(
 
     WITH new_post AS (
         SELECT
-            parent_thread_id,
+            COALESCE(parent_thread_id, id) AS parent_thread_id,
             id, user_id,
             count_content_characters_works(content) AS content_character_count
         FROM post
         WHERE in_boundaries(post.created_at, _lower_bound, _upper_bound)
-        UNION
-        SELECT
-            id,
-            id, user_id,
-            count_content_characters_works(content) AS content_character_count
-        FROM thread
-        WHERE in_boundaries(thread.created_at, _lower_bound, _upper_bound)
     )
     SELECT
 
         current_thread.id,
+        parent_board_id,
         current_thread.created_at,
         in_boundaries(current_thread.created_at, _lower_bound, _upper_bound) AS is_new,
         -- 这一项就不还原当时情况了
@@ -104,6 +70,7 @@ CREATE FUNCTION get_daily_threads_report(
     LEFT JOIN (
         -- TODO: 有办法把这堆 ARRAY_AGG 去掉吗？
         SELECT thread.id,
+            (ARRAY_AGG(current.parent_board_id))[1] AS parent_board_id,
             (ARRAY_AGG(current.created_at))[1] AS created_at,
             (ARRAY_AGG(current.user_id))[1] AS user_id,
             (ARRAY_AGG(current.title))[1] AS title,
@@ -119,7 +86,7 @@ CREATE FUNCTION get_daily_threads_report(
         GROUP BY thread.id
     ) AS current_thread ON current_thread.id = new_post.parent_thread_id -- 这里的 "current" 其实指的是"当时"
     -- TODO: 有办法把 current_thread.id 之外的去掉吗？
-    GROUP BY current_thread.id, current_thread.created_at, current_thread.user_id, current_thread.title, current_thread.name, current_thread.content, current_thread.updated_at, current_thread.is_disappeared, current_thread.current_reply_count
+    GROUP BY current_thread.id, parent_board_id, current_thread.created_at, current_thread.user_id, current_thread.title, current_thread.name, current_thread.content, current_thread.updated_at, current_thread.is_disappeared, current_thread.current_reply_count
     ORDER BY increased_response_count DESC;
 
     $$ LANGUAGE sql;
@@ -133,20 +100,20 @@ CREATE FUNCTION get_daily_qst_id_and_position(
     post_id     integer,
     "offset"    integer
 ) AS $$
-    WITH daily_qst_post AS (
-        SELECT id, created_at FROM post
+    WITH daily_qst_response AS (
+        SELECT id, created_at FROM response
         WHERE parent_thread_id = _daily_qst_thread_id
             AND in_boundaries(created_at, _lower_bound, _upper_bound)
             AND regexp_match(content, '^\[头条\]\s*<br />$', 'm') IS NOT NULL
         ORDER BY created_at DESC
         LIMIT 1
     )
-    SELECT daily_qst_post.id, current_reply_count - (
-        SELECT COUNT(id) FROM post
+    SELECT daily_qst_response.id, current_reply_count - (
+        SELECT COUNT(id) FROM response
         WHERE parent_thread_id = _daily_qst_thread_id
-        AND created_at > daily_qst_post.created_at
+        AND created_at > daily_qst_response.created_at
     )
-    FROM daily_qst_post
+    FROM daily_qst_response
     LEFT JOIN thread_extra ON thread_extra.id = _daily_qst_thread_id;
     $$ LANGUAGE sql;
 
