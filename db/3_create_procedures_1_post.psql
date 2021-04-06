@@ -74,19 +74,20 @@ CREATE PROCEDURE record_post(
         END IF;
 
         _should_insert := TRUE;
-        IF _is_thread THEN -- 暂时只为主串记录历史版本
-            IF EXISTS(SELECT thread.id FROM thread WHERE thread.id = _id) THEN
-                IF EXISTS(
-                    SELECT thread.id FROM thread
-                    -- parent_thread_id、effective_at_least_from 之外的全部
-                    WHERE thread.id = _id AND thread.parent_board_id = _parent_id AND thread.created_at = _created_at
-                        AND thread.user_id = _user_id AND thread.content = _content
-                        AND thread.attachment_base = _attachment_base AND thread.attachment_extension = _attachment_extension
-                        AND thread.name = _name AND thread.email = _email AND thread.title = _title AND thread.misc_fields = _misc_fields
-                ) THEN
-                    -- 内容未发生改变，只更新 thread_extra 即可
-                    _should_insert := FALSE;
-                ELSE -- 当前主串的内容与所存储的内容不完全一致
+        IF EXISTS(SELECT post.id FROM post WHERE post.id = _id) THEN
+            IF EXISTS(
+                SELECT post.id FROM post
+                -- effective_at_least_from 之外全部相关的列
+                WHERE post.id = _id
+                    AND CASE WHEN _is_thread THEN post.parent_board_id = _parent_id ELSE post.parent_thread_id = _parent_id END
+                    AND post.created_at = _created_at
+                    AND post.user_id = _user_id AND post.content = _content
+                    AND post.attachment_base = _attachment_base AND post.attachment_extension = _attachment_extension
+                    AND post.name = _name AND post.email = _email AND post.title = _title AND post.misc_fields = _misc_fields
+            ) THEN  -- 内容未发生改变。对于主串而言更新 thread_extra 即可
+                _should_insert := FALSE;
+            ELSE -- 当前的内容与所存储的内容不完全一致
+                IF _is_thread THEN -- 暂时只为主串记录历史版本
                     INSERT INTO thread_old_revision (
                         id, effective_at_least_from,
                         parent_board_id, created_at, user_id, content,
@@ -102,6 +103,8 @@ CREATE PROCEDURE record_post(
                         current_setting('fto.MIGRATING')::boolean
                     FROM thread
                     WHERE thread.id = _id;
+                ELSE
+                    -- pass
                 END IF;
             END IF;
         END IF;
@@ -123,7 +126,8 @@ CREATE PROCEDURE record_post(
                 _name, _email, _title, _misc_fields
             )
             ON CONFLICT (id) DO
-            UPDATE SET -- 不更新 effective_at_least_from
+            UPDATE SET
+                effective_at_least_from = _updated_at,
                 parent_board_id = CASE WHEN _is_thread THEN _parent_id ELSE NULL END,
                 parent_thread_id = CASE WHEN _is_thread THEN NULL ELSE _parent_id END,
                 created_at = EXCLUDED.created_at,

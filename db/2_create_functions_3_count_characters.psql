@@ -1,11 +1,19 @@
 CREATE FUNCTION remove_all_spaces(in _content text)
     RETURNS text AS $$
-        SELECT regexp_replace(_content, '[\s\xa0]', '', 'g');
+        SELECT regexp_replace(_content, '[\s\xa0\u3000]', '', 'g');
+    $$ LANGUAGE sql;
+
+CREATE FUNCTION unescape_match_length(in _content text)
+    RETURNS text AS $$
+        SELECT REGEXP_REPLACE(_content, '&.+?;', 'x', 'g')
     $$ LANGUAGE sql;
 
 -- 原来的版本太慢了，由于要转义的内容结果都是一个字符，就直接替换成 `x` 了。
 -- 4.5s~4.6s -> 1.5s~1.6s.
 -- it works
+-- 目前发现的少数不正确之处：
+-- * 14087134: 这个是管理手写 html 写错了导致的，算极特殊情况，不管了
+-- * 36376953: '\x14( \x14 )\x14' 原先统计出的是 5，本方法统计出的是 7。不明白原先为何是 5，不管了
 CREATE FUNCTION count_content_characters_works(in _content text)
     RETURNS integer AS $$
     DECLARE
@@ -17,7 +25,7 @@ CREATE FUNCTION count_content_characters_works(in _content text)
         END IF;
 
         RETURN (
-            SELECT LENGTH(REGEXP_REPLACE(string_agg(unnest::text, ''), '&.+?;', 'x'))
+            SELECT COALESCE(LENGTH(remove_all_spaces(unescape_match_length(string_agg(unnest::text, '')))), 0)
             FROM unnest(xpath('/*//text()', _wrapped_content::xml)));
     END
     $$ LANGUAGE plpgsql;

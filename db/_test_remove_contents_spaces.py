@@ -14,23 +14,20 @@ def main():
     cur: psycopg2._psycopg.cursor = conn.cursor()
 
     x = 0
-    cur.execute(r'SELECT content FROM post')
-    for i, [content] in enumerate(cur.fetchall()):
-        if i % 100 == 0:
+    cur.execute(r'SELECT id, content FROM post')
+    for i, [id, content] in enumerate(cur.fetchall()):
+        if i % 1000 == 0:
             print(i+1)
         with conn.cursor() as cur2:
             cur2.execute(
-                r'''SELECT remove_all_spaces, length FROM remove_all_spaces(extract_text(%s)), length(remove_all_spaces)''', (content,))
-            [no_spaces_content_pg, length_pg] = cur2.fetchone()
+                r'''SELECT count_content_characters_works(%s)''', (content,))
+            [length_pg] = cur2.fetchone()
         no_spaces_content_bs = re.sub(
             r'\s', '', BeautifulSoup(content, 'html.parser').get_text())
-        if no_spaces_content_bs != no_spaces_content_pg:
-            print([i+1, 'content', content,
-                  no_spaces_content_bs, no_spaces_content_pg])
+        if len(no_spaces_content_bs) != length_pg:
+            print([i+1, x+1, 'length', len(no_spaces_content_bs), length_pg,
+                   id, content])
             x += 1
-        elif len(no_spaces_content_bs) != length_pg:
-            print([i+1, 'length', content,
-                   len(no_spaces_content_bs), length_pg])
         if x == 10:
             break
 
