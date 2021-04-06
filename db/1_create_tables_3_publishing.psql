@@ -25,9 +25,9 @@ CREATE TABLE publication_page (
     page_number     integer NOT NULL,
 
     -- 如果找到所发的串则不为空
-    corresponding_post_id   integer,
+    corresponding_response_id   integer,
     -- 所发的串是第几个回应
-    post_offset    integer,
+    response_offset    integer,
 
     PRIMARY KEY (id),
     FOREIGN KEY (record_id) REFERENCES publication_record(id)
