@@ -12,7 +12,7 @@ for i in $(seq 1 4); do
     echo
 done
 
-for i in $(seq 1 1); do
+for i in $(seq 1 3); do
     cat 3_create_procedures_${i}_*.psql
     echo
 done

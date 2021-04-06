@@ -1,0 +1,105 @@
+CREATE FUNCTION get_publication_record_id(
+    in _subject_date date,
+    in _report_type text
+) RETURNS integer AS $$
+    SELECT id FROM publication_record 
+    WHERE subject_date = _subject_date
+        AND report_type = _report_type;
+    $$ LANGUAGE sql;
+
+CREATE FUNCTION is_report_published(
+    in _subject_date date,
+    in _report_type text
+) RETURNS boolean AS $$
+    SELECT get_publication_record_id(_subject_date, _report_type) IS NOT NULL
+        -- 有可能刚建立报告而还未确认页数，导致 publication_page 尚无相关记录
+        AND COUNT(publication_page.id) > 0
+        -- 未完成发布的报告页面 corresponding_response_id 会是 NULL
+        AND COUNT(publication_page.id) = COUNT(corresponding_response_id)
+    FROM publication_record
+    LEFT JOIN publication_page ON publication_page.record_id = publication_record.id
+    WHERE subject_date = _subject_date AND report_type = _report_type;
+    $$ LANGUAGE sql;
+
+CREATE FUNCTION get_publication_record_id_and_create_record_if_needed(
+    in _subject_date date,
+    in _report_type text
+) RETURNS integer AS $$
+    DECLARE
+        _record_id integer;
+    BEGIN
+        _record_id = (SELECT get_publication_record_id(_subject_date, _report_type));
+        IF _record_id IS NOT NULL THEN
+            RETURN _record_id;
+        END IF;
+
+        INSERT INTO publication_record(subject_date, report_type, uuid)
+        VALUES (_subject_date, _report_type, gen_random_uuid());
+
+        RETURN (SELECT get_publication_record_id(_subject_date, _report_type));
+    END;
+    $$ LANGUAGE plpgsql;
+
+CREATE FUNCTION get_publication_record_attempts(in _record_id integer)
+RETURNS integer AS $$
+    SELECT attempts FROM publication_record 
+    WHERE id = _record_id;
+    $$ LANGUAGE sql;
+
+CREATE PROCEDURE increase_publication_record_attempts(in _record_id integer)
+AS $$
+    UPDATE publication_record
+    SET attempts = attempts + 1
+    WHERE id = _record_id;
+    $$ LANGUAGE sql;
+
+CREATE FUNCTION get_publication_pages_response_info(in _record_id integer)
+RETURNS TABLE (
+    page_number integer,
+    corresponding_response_id integer,
+    response_offset integer
+) AS $$
+    SELECT page_number, corresponding_response_id, response_offset
+    FROM publication_page
+    WHERE record_id = _record_id;
+    $$ LANGUAGE sql;
+
+CREATE PROCEDURE report_publication_destination_thread_id_and_page_count(
+    in _record_id               integer,
+    in _destination_thread_id   integer,
+    in _page_count              integer
+) AS $$
+    BEGIN
+        UPDATE publication_record
+        SET destination_thread_id = _destination_thread_id
+        WHERE id = _record_id;
+
+        -- 以防万一
+        -- TODO: 其实不该这样，数据应该只生成一次，就不用担心页数变化了，进而也不用一次失败全部作废了
+        DELETE FROM publication_page
+        WHERE record_id = _record_id;
+
+        FOR _page_number IN 1.._page_count LOOP
+            INSERT INTO publication_page (record_id, page_number)
+            VALUES (_record_id, _page_number);
+        END LOOP;
+    END;
+    $$ LANGUAGE plpgsql;
+
+CREATE PROCEDURE report_found_publication_page(
+    in _record_id integer,
+    in _page_number integer,
+    in _corresponding_response_id integer,
+    in _response_offset integer
+) AS $$
+    UPDATE publication_page
+    SET
+        corresponding_response_id = _corresponding_response_id,
+        response_offset = _response_offset
+    WHERE record_id = _record_id AND page_number = _page_number;
+    $$ LANGUAGE sql;
+
+CREATE FUNCTION get_publication_record_uuid(in _record_id integer)
+RETURNS uuid AS $$
+    SELECT uuid FROM publication_record WHERE id = _record_id;
+    $$ LANGUAGE sql;

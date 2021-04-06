@@ -73,6 +73,7 @@ class PublicationRecord:
     def reply_posts(self) -> List[PublishedPost]:
         posts = []
         with self.conn.cursor() as cur:
+            cur: psycopg2._psycopg.cursor = cur
             cur.execute(r'''SELECT * FROM get_publication_pages_response_info(%s)''',
                         (self._id,))
             for row in cur:
@@ -84,39 +85,21 @@ class PublicationRecord:
                 return posts
 
     def report_thread_id_and_reply_count(self, thread_id: int, reply_count: int):
-        self.conn_s3.execute(r'''
-            UPDATE publishing_trace
-            SET to_thread_id = ?
-            WHERE id = ?
-        ''', (thread_id, self._id))
-
-        # 以防万一
-        self.conn_s3.execute(r'''
-            DELETE FROM published_post
-            WHERE trace_id = ?
-        ''', (self._id,))
-
-        for i in range(reply_count):
-            page_number = i+1
-            self.conn_s3.execute(r'''
-                INSERT INTO published_post (trace_id, page_number)
-                VALUES (?, ?)
-            ''', (self._id, page_number))
-        self.conn_s3.commit()
+        with self.conn.cursor() as cur:
+            cur: psycopg2._psycopg.cursor = cur
+            cur.execute(r'''CALL report_publication_destination_thread_id_and_page_count(%s, %s, %s)''',
+                        (self._id, thread_id, reply_count))
 
     def report_found_reply_post(self, report_page_number: int, post_id: int, offset: int):
-        self.conn_s3.execute(r'''
-            UPDATE published_post
-            SET
-                reply_post_id = ?,
-                reply_offset = ?
-            WHERE trace_id = ? AND page_number = ?
-        ''', (post_id, offset, self._id, report_page_number))
-        self.conn_s3.commit()
+        with self.conn.cursor() as cur:
+            cur: psycopg2._psycopg.cursor = cur
+            cur.execute(r'''CALL report_found_publication_page(%s, %s, %s, %s)''',
+                        (self._id, report_page_number, post_id, offset))
 
     @property
     def uuid(self) -> str:
-        return self.conn_s3.execute(r'''
-            SELECT uuid FROM publishing_trace
-            WHERE id = ?
-        ''', (self._id,)).fetchone()[0]
+        with self.conn.cursor() as cur:
+            cur: psycopg2._psycopg.cursor = cur
+            cur.execute(r'''SELECT * FROM get_publication_record_uuid(%s)''',
+                        (self._id,))
+            return cur.fetchone()[0]
