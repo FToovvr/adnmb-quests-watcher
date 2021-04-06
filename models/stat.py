@@ -10,7 +10,8 @@ import regex
 
 import anobbsclient
 
-from .consts import local_tz, ZWSP, OMITTING
+# pylint: disable=relative-beyond-top-level
+from ..commons.consts import local_tz, ZWSP, OMITTING
 
 
 @dataclass(frozen=True)

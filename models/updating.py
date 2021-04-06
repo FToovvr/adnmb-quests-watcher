@@ -9,7 +9,8 @@ import traceback
 
 import anobbsclient
 
-from commons import local_tz
+# pylint: disable=relative-beyond-top-level
+from ..commons.consts import local_tz
 
 
 @dataclass
