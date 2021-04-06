@@ -62,19 +62,22 @@ CREATE PROCEDURE record_post(
     in _misc_fields             jsonb,
 
     in _current_reply_count     integer,
-    in _updated_at              timestamptz
+    in _updated_at              timestamptz,
+
+    in _is_import               boolean DEFAULT FALSE
 ) AS $$
     DECLARE
         _should_insert boolean;
     BEGIN
         IF NOT current_setting('fto.MIGRATING')::boolean THEN
-            IF _is_thread AND _updated_at IS NULL THEN
-                RAISE EXCEPTION '_updated_at must not be null when records thread';
+            IF _is_thread AND _updated_at IS NULL AND NOT _is_import THEN
+                RAISE EXCEPTION '记录主串时，除非处于导入模式，`_updated_at` 不应为 `NULL`';
             END IF;
         END IF;
 
         _should_insert := TRUE;
         IF EXISTS(SELECT post.id FROM post WHERE post.id = _id) THEN
+            IF _is_import THEN RETURN; END IF;
             IF EXISTS(
                 SELECT post.id FROM post
                 -- effective_at_least_from 之外全部相关的列
@@ -179,14 +182,17 @@ CREATE PROCEDURE record_thread(
     in _misc_fields             jsonb,
 
     in _current_reply_count     integer,
-    in _updated_at              timestamptz
+    in _updated_at              timestamptz,
+
+    in _is_import               boolean DEFAULT FALSE
 ) AS $$
     CALL record_post(
         _id, TRUE, _parent_board_id,
         _created_at, _user_id, _content,
         _attachment_base, _attachment_extension,
         _name, _email, _title, _misc_fields,
-        _current_reply_count, _updated_at
+        _current_reply_count, _updated_at,
+        _is_import
     );
     $$ LANGUAGE sql;
 
@@ -204,13 +210,16 @@ CREATE PROCEDURE record_response(
     in _title                   text,
     in _misc_fields             jsonb,
 
-    in _updated_at              timestamptz
+    in _updated_at              timestamptz,
+
+    in _is_import               boolean DEFAULT FALSE
 ) AS $$
     CALL record_post(
         _id, FALSE, _parent_thread_id,
         _created_at, _user_id, _content,
         _attachment_base, _attachment_extension,
         _name, _email, _title, _misc_fields,
-        NULL, _updated_at
+        NULL, _updated_at,
+        _is_import
     );
     $$ LANGUAGE sql;
