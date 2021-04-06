@@ -23,9 +23,10 @@ import psycopg2
 import anobbsclient
 from anobbsclient.walk import create_walker, ReversalThreadWalkTarget
 
-from commons import Trace, local_tz, ZWSP, OMITTING, get_target_date
+from commons.consts import local_tz, ZWSP, OMITTING, get_target_date
 from commons.config import load_config, ClientConfig
-from commons.stat_model_pg import ThreadStats, Counts, Stats, DB
+from models.stat import ThreadStats, Counts, Stats, DB
+from models.publication_record import PublicationRecord
 from commons.debugging import super_huge_thread_pg
 
 
@@ -58,10 +59,6 @@ class Arugments:
     force_slience: bool
 
     client_config: ClientConfig
-
-    @property
-    def needs_to_track(self) -> bool:
-        return self.publish_on_trend_thread
 
     @property
     def requires_client(self) -> bool:
@@ -231,9 +228,6 @@ def RANK_INCLUDING(thread: ThreadStats, including: Including,
         assert(False)
 
 
-# 每页收录数目
-RANK_PAGE_CAPACITY = 20
-
 MAIN_DIVIDER_PART = f"══{ZWSP}══{ZWSP}══"
 META_MAIN_DIVIDER = f"{MAIN_DIVIDER_PART}　META　{MAIN_DIVIDER_PART}"
 
@@ -247,57 +241,86 @@ def main():
     else:
         client = None
 
-    if args.needs_to_track:
-        trace = Trace(conn=sqlite3.connect('db.sqlite3'),
-                      date=args.target_date, type_='trend')
-        attempts = trace.attempts
-        if trace.is_done or attempts > 3:
-            return
-        trace.increase_attempts()
+    with psycopg2.connect(args.connection_string) as conn:
 
-        logging.config.fileConfig('logging.3_publish_report.conf')
+        if args.publish_on_trend_thread:
+            publication_record = PublicationRecord(conn=conn,
+                                                   date=args.target_date, type_='trend')
+            attempts = publication_record.attempts
+            if publication_record.is_done or attempts > 3:
+                return
+            publication_record.increase_attempts()
 
-        logging.info(f"开始进行发布报告相关流程。UUID={trace.uuid}，数据库=PostgreSQL")
+            logging.config.fileConfig('logging.3_publish_report.conf')
 
-    if args.check_sage:
-        (trend_thread, _) = client.get_thread_page(
-            args.trend_thread_id, page=1)
-        if trend_thread.marked_sage:
+            logging.info(
+                f"开始进行发布报告相关流程。UUID={publication_record.uuid}，数据库=PostgreSQL")
+
+        if args.check_sage and check_sage(args.trend_thread_id, client):
             logging.warn("趋势串已下沉。本次终止")
-
-    if args.needs_to_track:
-        logging.info("尚未发送回应请求以发布报告，将生成报告文本并尝试发送回应请求")
-        uuid = trace.uuid
-    else:
-        uuid = None
-
-    pages = retrieve_data_then_generate_trend_report_text(
-        connection_string=args.connection_string,
-        daily_qst_thread_id=args.daily_qst_thread_id,
-        date=args.target_date, uuid=uuid,
-        rank_inclusion_method=args.including,
-        should_compare_with_last_day=not args.no_compare,
-    )
-
-    if not args.needs_to_track:
-        if args.force_slience:
             return
-        for (title, name, content) in pages:
-            print('\n'.join([
-                "标题：" + title,
-                "名称：" + name,
-                content,
-            ]))
-        return
 
-    logging.info(f"报告文本页数：{len(pages)}")
+        if args.publish_on_trend_thread:
+            logging.info("尚未发送回应请求以发布报告，将生成报告文本并尝试发送回应请求")
+            uuid = publication_record.uuid
+        else:
+            uuid = None
 
-    trace.report_thread_id_and_reply_count(
-        thread_id=args.trend_thread_id,
+        pages = retrieve_data_then_generate_trend_report_text(
+            conn=conn,
+            daily_qst_thread_id=args.daily_qst_thread_id,
+            date=args.target_date, uuid=uuid,
+            rank_inclusion_method=args.including,
+            rank_page_capacity=args.page_capacity,
+            should_compare_with_last_day=not args.no_compare,
+        )
+
+        if not args.publish_on_trend_thread:
+            if not args.force_slience:
+                print_report(pages)
+            return
+
+        logging.info(f"报告文本页数：{len(pages)}")
+
+        publish(pages, args.trend_thread_id, uuid, client, publication_record)
+        logging.info("已发送各页报告且找到报告各页对应的各回应")
+
+        if args.notify_target is not None:
+            if args.notify_target == 'daily_qst_thread':
+                notify_thread_id = args.daily_qst_thread_id
+            else:
+                assert(args.notify_target == 'trend_thread')
+                notify_thread_id = args.trend_thread_id
+            notify(notify_thread_id, args.target_date,
+                   client, publication_record)
+
+    logging.info("成功结束")
+
+
+def check_sage(trend_thread_id: int, client: anobbsclient.client):
+    (trend_thread, _) = client.get_thread_page(trend_thread_id, page=1)
+    return trend_thread.marked_sage
+
+
+def print_report(pages: Tuple[str, str, str]):
+    for (title, name, content) in pages:
+        print('\n'.join([
+            "标题：" + title,
+            "名称：" + name,
+            content,
+        ]))
+
+
+def publish(pages: Tuple[str, str, str], destination_thread_id: int, uuid: str,
+            client: Optional[anobbsclient.Client],
+            publication_record: PublicationRecord):
+
+    publication_record.report_thread_id_and_reply_count(
+        thread_id=destination_thread_id,
         reply_count=len(pages)
     )
     first_rount = True
-    for post in trace.reply_posts:
+    for post in publication_record.reply_posts:
         logging.info(f"处理发布第 {post.report_page_number} 页…")
         if post.reply_post_id is not None:
             logging.info(f"本页已有发布成功的记录，跳过")
@@ -312,7 +335,7 @@ def main():
         (title, name, content) = pages[post.report_page_number-1]
 
         try:
-            client.reply_thread(content, to_thread_id=args.trend_thread_id,
+            client.reply_thread(content, to_thread_id=destination_thread_id,
                                 title=title, name=name)
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
             logging.warning("请求服务器超时，将尝试检查是否成功发串")
@@ -330,13 +353,13 @@ def main():
 
         logging.info(f"将查找属于本页报告的回应")
 
-        found_post = find_last_post_with_uuid(client, args.trend_thread_id)
+        found_post = find_last_post_with_uuid(client, destination_thread_id)
         if found_post is None:
             logging.error("未找到任何带有 UUID 回应，本次终止")
             exit(1)
 
         (report_page_number, post_id, uuid, offset) = found_post
-        if uuid != trace.uuid:
+        if uuid != publication_record.uuid:
             logging.error(f"最后带有 UUID 的回应的 UUID 与本次的不匹配，本次终止。找到的 UUID={uuid}")
             exit(1)
         if report_page_number != post.report_page_number:
@@ -346,46 +369,40 @@ def main():
 
         logging.info(f"找到本页报告对应回应，将记录。回应串号={post_id}，偏移={offset}")
 
-        trace.report_found_reply_post(
+        publication_record.report_found_reply_post(
             report_page_number=report_page_number,
             post_id=post_id, offset=offset,
         )
 
-    logging.info("已发送各页报告且找到报告各页对应的各回应")
 
-    if args.notify_target is not None:
-        # TODO: 检查成功与否
+def notify(notify_thread_id: int, subject_date: date,
+           client: anobbsclient.Client,
+           publication_record: PublicationRecord):
+    # TODO: 检查成功与否
 
-        if args.notify_target == 'daily_qst_thread':
-            notify_to_thread_id = args.daily_qst_thread_id
-        else:
-            assert(args.notify_target == 'trend_thread')
-            notify_to_thread_id = args.trend_thread_id
-        logging.info(f"将发送报告出炉通知。由于发串间隔限制，将等待30秒")
-        sleep(30)
+    logging.info(f"将发送报告出炉通知。由于发串间隔限制，将等待30秒")
+    sleep(30)
 
-        posts = trace.reply_posts
-        content = args.target_date.strftime(
-            f"%Y年%-m月%-d日 跑团版 趋势日度报告：\n")
-        content += '\n'.join(
-            list(map(lambda x: f">>No.{x.reply_post_id}", posts))
-        ) + '\n'
-        min_reply_pn = (posts[0].reply_offset-1)//19+1
-        max_reply_pn = (posts[-1].reply_offset-1)//19+1
-        if min_reply_pn == max_reply_pn:
-            content += f"(位于原串第{min_reply_pn}页)"
-        else:
-            content += f"(位于原串第{min_reply_pn}〜{max_reply_pn}页)"
-        content += '\n'
+    posts = publication_record.reply_posts
+    content = subject_date.strftime(
+        f"%Y年%-m月%-d日 跑团版 趋势日度报告：\n")
+    content += '\n'.join(
+        list(map(lambda x: f">>No.{x.reply_post_id}", posts))
+    ) + '\n'
+    min_reply_pn = (posts[0].reply_offset-1)//19+1
+    max_reply_pn = (posts[-1].reply_offset-1)//19+1
+    if min_reply_pn == max_reply_pn:
+        content += f"(位于原串第{min_reply_pn}页)"
+    else:
+        content += f"(位于原串第{min_reply_pn}〜{max_reply_pn}页)"
+    content += '\n'
 
-        client.reply_thread(
-            to_thread_id=notify_to_thread_id,
-            title="本期跑团版趋势报告出炉",
-            name=args.target_date.strftime("%Y年%-m月%-d日 号"),
-            content=content,
-        )
-
-    logging.info("成功结束")
+    client.reply_thread(
+        to_thread_id=notify_thread_id,
+        title="本期跑团版趋势报告出炉",
+        name=subject_date.strftime("%Y年%-m月%-d日 号"),
+        content=content,
+    )
 
 
 def find_last_post_with_uuid(client: anobbsclient.Client, thread_id: int) -> Optional[Tuple[int, int, str, int]]:
@@ -445,24 +462,24 @@ def find_last_post_with_uuid(client: anobbsclient.Client, thread_id: int) -> Opt
 
 
 def retrieve_data_then_generate_trend_report_text(
-    connection_string: str,
+    conn: psycopg2._psycopg.connection,
     daily_qst_thread_id: int,
     date: datetime, uuid: str,
     rank_inclusion_method: Including,
+    rank_page_capacity: int,
     should_compare_with_last_day: bool,
 ) -> Tuple[str, str, str]:
-    with psycopg2.connect(connection_string) as conn:
-        with conn.cursor() as cur:
-            db = DB(cur=cur)
-            return TrendReportTextGenerator(
-                db=db,
-                daily_qst_thread_id=daily_qst_thread_id,
-                date=date,
-                rank_inclusion_method=rank_inclusion_method,
-                rank_page_capacity=RANK_PAGE_CAPACITY,
-                uuid=uuid,
-                should_compare_with_last_day=should_compare_with_last_day,
-            ).generate()
+    with conn.cursor() as cur:
+        db = DB(cur=cur)
+        return TrendReportTextGenerator(
+            db=db,
+            daily_qst_thread_id=daily_qst_thread_id,
+            date=date,
+            rank_inclusion_method=rank_inclusion_method,
+            rank_page_capacity=rank_page_capacity,
+            uuid=uuid,
+            should_compare_with_last_day=should_compare_with_last_day,
+        ).generate()
 
 
 @dataclass(frozen=True)

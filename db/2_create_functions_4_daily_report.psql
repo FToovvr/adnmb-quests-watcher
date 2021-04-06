@@ -19,7 +19,7 @@ CREATE FUNCTION get_daily_threads_report(
     increased_character_count       integer,
     increased_character_count_by_po  integer,
 
-    blue_texts          xml[],
+    blue_texts          text[],
     are_blue_texts_new  boolean
 ) AS $$
 
@@ -63,7 +63,7 @@ CREATE FUNCTION get_daily_threads_report(
         SUM(CASE WHEN current_thread.user_id = new_post.user_id THEN new_post.content_character_count ELSE 0 END)
             AS increased_character_count_by_po,
 
-        extract_blue_texts(current_thread.content) AS blue_texts,
+        extract_blue_texts(current_thread.content)::text[] AS blue_texts,
         thread_got_new_blue_texts_between(current_thread.id, _lower_bound, _upper_bound) AS are_blue_texts_new
 
     FROM new_post

@@ -10,8 +10,11 @@ import regex
 
 import anobbsclient
 
+import sys
+sys.path.append("..")  # noqa
+
 # pylint: disable=relative-beyond-top-level
-from ..commons.consts import local_tz, ZWSP, OMITTING
+from commons.consts import local_tz, ZWSP, OMITTING
 
 
 @dataclass(frozen=True)
@@ -126,6 +129,12 @@ class DB:
 
     cur: psycopg2._psycopg.cursor
 
+    @staticmethod
+    def format_blue_texts(blue_texts: Optional[str]):
+        if blue_texts is None:
+            return None
+        return BeautifulSoup(blue_texts[0], 'html.parser').get_text()
+
     def get_daily_threads(self, date: datetime) -> List[ThreadStats]:
         lower_bound, upper_bound = self._get_boundaries(date)
 
@@ -134,26 +143,41 @@ class DB:
         rows = self.cur.fetchall()
 
         threads: List[ThreadStats] = []
-        for row in rows:
+        for [
+            id, parent_board_id,  # TODO: parent_board_id 暂时还不知道要在哪筛选，毕竟现在只有 111（跑团版）一个值
+            created_at, is_new, is_disappeared,
+
+            title, name, content,
+
+            total_response_count,
+            increased_response_count,
+            increased_response_count_by_po,
+            distinct_cookie_count,
+            increased_character_count,
+            increased_character_count_by_po,
+
+            blue_texts,
+            are_blue_texts_new,
+        ] in rows:
             threads.append(ThreadStats(
-                id=row[0],
-                created_at=row[1],
-                is_new=row[2],
-                is_disappeared=row[3],
+                id=id,
+                created_at=created_at,
+                is_new=is_new,
+                is_disappeared=is_disappeared,
 
-                title=row[4],
-                name=row[5],
-                raw_content=row[6],
+                title=title,
+                name=name,
+                raw_content=content,
 
-                total_reply_count=row[7],
-                increased_response_count=row[8],
-                increased_response_count_by_po=row[9],
-                distinct_cookie_count=row[10],
-                increased_character_count=row[11],
-                increased_character_count_by_po=row[12],
+                total_reply_count=total_response_count,
+                increased_response_count=increased_response_count,
+                increased_response_count_by_po=increased_response_count_by_po,
+                distinct_cookie_count=distinct_cookie_count,
+                increased_character_count=increased_character_count,
+                increased_character_count_by_po=increased_character_count_by_po,
 
-                blue_text=row[13],
-                are_blue_texts_new=row[14],
+                blue_text=DB.format_blue_texts(blue_texts),
+                are_blue_texts_new=are_blue_texts_new,
             ))
 
         return threads
