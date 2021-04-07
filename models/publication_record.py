@@ -24,6 +24,8 @@ class PublicationRecord:
     subject_date: date
     report_type: str
 
+    uuid: Optional[str] = None
+
     _id: int = field(init=False)
 
     @staticmethod
@@ -41,9 +43,16 @@ class PublicationRecord:
 
         with self.conn.cursor() as cur:
             cur: psycopg2._psycopg.cursor = cur
-            cur.execute(r'''SELECT * FROM get_publication_record_id_and_create_record_if_needed(%s, %s)''',
-                        (self.subject_date, self.report_type))
+            cur.execute(r'''SELECT * FROM get_publication_record_id_and_create_record_if_needed(%s, %s, %s)''',
+                        (self.subject_date, self.report_type, self.uuid))
             object.__setattr__(self, '_id', cur.fetchone()[0])
+            cur.execute(r'''SELECT * FROM get_publication_record_uuid(%s)''',
+                        (self._id,))
+            uuid = cur.fetchone()[0]
+            if (not self.uuid):
+                object.__setattr__(self, 'uuid', uuid)
+            else:
+                assert(self.uuid == uuid)
 
     @property
     def is_done(self) -> bool:
@@ -60,14 +69,14 @@ class PublicationRecord:
         with self.conn.cursor() as cur:
             cur: psycopg2._psycopg.cursor = cur
             cur.execute(r'''SELECT * FROM get_publication_record_attempts(%s)''',
-                        (self._id))
+                        (self._id,))
             return cur.fetchone()[0]
 
     def increase_attempts(self):
         with self.conn.cursor() as cur:
             cur: psycopg2._psycopg.cursor = cur
             cur.execute(r'''CALL increase_publication_record_attempts(%s)''',
-                        (self._id))
+                        (self._id,))
 
     @property
     def reply_posts(self) -> List[PublishedPost]:
@@ -95,11 +104,3 @@ class PublicationRecord:
             cur: psycopg2._psycopg.cursor = cur
             cur.execute(r'''CALL report_found_publication_page(%s, %s, %s, %s)''',
                         (self._id, report_page_number, post_id, offset))
-
-    @property
-    def uuid(self) -> str:
-        with self.conn.cursor() as cur:
-            cur: psycopg2._psycopg.cursor = cur
-            cur.execute(r'''SELECT * FROM get_publication_record_uuid(%s)''',
-                        (self._id,))
-            return cur.fetchone()[0]

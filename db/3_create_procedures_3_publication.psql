@@ -22,8 +22,9 @@ CREATE FUNCTION is_report_published(
     $$ LANGUAGE sql;
 
 CREATE FUNCTION get_publication_record_id_and_create_record_if_needed(
-    in _subject_date date,
-    in _report_type text
+    in _subject_date    date,
+    in _report_type     text,
+    in _uuid            uuid    DEFAULT NULL
 ) RETURNS integer AS $$
     DECLARE
         _record_id integer;
@@ -34,7 +35,7 @@ CREATE FUNCTION get_publication_record_id_and_create_record_if_needed(
         END IF;
 
         INSERT INTO publication_record(subject_date, report_type, uuid)
-        VALUES (_subject_date, _report_type, gen_random_uuid());
+        VALUES (_subject_date, _report_type, COALESCE(_uuid, gen_random_uuid()));
 
         RETURN (SELECT get_publication_record_id(_subject_date, _report_type));
     END;
