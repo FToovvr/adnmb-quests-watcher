@@ -251,7 +251,7 @@ def main():
                 return
             publication_record.increase_attempts()
 
-            logging.config.fileConfig('logging.3_publish_report.conf')
+            logging.config.fileConfig('logging.3_generate_text_report.conf')
 
             logging.info(
                 f"开始进行发布报告相关流程。UUID={publication_record.uuid}，数据库=PostgreSQL")

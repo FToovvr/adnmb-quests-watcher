@@ -22,7 +22,7 @@ from commons.updating_model import TotalBandwidthUsage, Stats, DB
 
 # 默认单线程
 
-logging.config.fileConfig('logging.1_update_database.conf')
+logging.config.fileConfig('logging.1_collect.conf')
 
 BOARD_ID = 111  # 跑团版
 

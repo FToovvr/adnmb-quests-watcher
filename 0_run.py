@@ -29,7 +29,7 @@ def main():
         if result.returncode == 0:
             subprocess.run(['/bin/rm', '-rf', yesterday_log_folder])
 
-    result = subprocess.run('./1_update_database.py')
+    result = subprocess.run('./1_collect.py')
     assert(result.returncode == 0)
 
     with sqlite3.connect('db.sqlite3') as conn:
@@ -46,7 +46,7 @@ def main():
 
     if not is_publication_done:
         result = subprocess.run([
-            './3_publish_report.py', target_date.isoformat(),
+            './3_generate_text_report.py', target_date.isoformat(),
             '--check-sage',
             '--publish', '--notify-daily-qst',
         ])
