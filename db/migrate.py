@@ -15,6 +15,7 @@ import sys
 sys.path.append("..")  # noqa
 
 from models.publication_record import PublicationRecord
+from models.activity import Activity, Stats, TotalBandwidthUsage
 
 local_tz = tz.gettz('Asia/Shanghai')
 
@@ -64,22 +65,39 @@ def main():
 
 
 def migrate_activity_table(conn_s3: sqlite3.Connection, conn_pg: psycopg2._psycopg.connection):
-    with conn_pg.cursor() as cur_pg:
-        for [
-            id, run_at, fetched_since, ensured_fetched_until, is_successful, message,
-            uploaded_bytes, downloaded_bytes, newly_recorded_thread_count, affected_thread_count,
-            newly_recorded_post_count, requested_board_page_count, requested_thread_page_count, logged_in_thread_request_count,
-        ] in conn_s3.execute(r'SELECT * FROM activity'):
-            cur_pg.execute(r'''
-            INSERT INTO activity
-            VALUES (''' + ', '.join([r'%s']*15) + r''')
-            ON CONFLICT DO NOTHING
-            ''', (
-                id, None, ts2dt(run_at), ts2dt(fetched_since), ts2dt(
-                    ensured_fetched_until), bool(is_successful), message,
-                uploaded_bytes, downloaded_bytes, newly_recorded_thread_count, affected_thread_count,
-                newly_recorded_post_count, requested_board_page_count, requested_thread_page_count, logged_in_thread_request_count,
-            ))
+    n = count_rows(conn_s3, 'activity')
+    last_fetched_until: datetime = None
+    for i, [
+        _,  # id,
+        run_at, fetched_since, ensured_fetched_until, is_successful, message,
+        uploaded_bytes, downloaded_bytes, newly_recorded_thread_count, affected_thread_count,
+        newly_recorded_post_count, requested_board_page_count, requested_thread_page_count, logged_in_thread_request_count,
+    ] in enumerate(conn_s3.execute(r'SELECT * FROM activity')):
+        activity = Activity(
+            conn=conn_pg, activity_type='legacy', run_at=ts2dt(run_at), logger=None)
+        if last_fetched_until is None:
+            assert(Activity.never_collected(conn=conn_pg))
+            assert(activity.should_collect_since)
+        else:
+            assert(not Activity.never_collected(conn=conn_pg))
+            assert(activity.should_collect_since == last_fetched_until)
+        activity.report_collecting_range(since=ts2dt(
+            fetched_since), until=ts2dt(ensured_fetched_until))
+        if ensured_fetched_until and is_successful:
+            last_fetched_until = ts2dt(ensured_fetched_until)
+        stats = Stats()
+        stats.new_thread_count = newly_recorded_thread_count
+        stats.affected_thread_count = affected_thread_count
+        stats.new_post_count = newly_recorded_post_count
+        stats.board_request_count = requested_board_page_count
+        stats.thread_request_count = requested_thread_page_count
+        stats.logged_in_thread_request_count = logged_in_thread_request_count
+        stats.total_bandwidth_usage.add([uploaded_bytes, downloaded_bytes])
+
+        activity.report_end(is_successful=bool(is_successful), message=message,
+                            stats=stats)
+        if i % 100 == 0:
+            print(f"activity: {i+1}/{n} {ts2dt(run_at)}")
 
 
 def remove_fid_field(misc_fields: Optional[str]) -> Optional[str]:
@@ -195,7 +213,7 @@ def migrate_post_table(conn_s3: sqlite3.Connection, conn_pg: psycopg2._psycopg.c
                 None,
             ))
             if i % 100 == 0:
-                print(f"{i+1}/{n}")
+                print(f"post: {i+1}/{n} {ts2dt(created_at)}")
 
 
 def migrate_publication_tables(conn_s3: sqlite3.Connection, conn_pg: psycopg2._psycopg.connection):

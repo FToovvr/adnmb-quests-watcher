@@ -13,121 +13,13 @@ import anobbsclient
 from ..commons.consts import local_tz
 
 
-@dataclass
-class TotalBandwidthUsage:
-    usages: List[anobbsclient.BandwidthUsage] = field(default_factory=list)
-
-    def add(self, new_usage: anobbsclient.BandwidthUsage):
-        self.usages.append(new_usage)
-
-    @property
-    def total(self) -> anobbsclient.BandwidthUsage:
-        return tuple(map(sum, zip(*self.usages)))
-
-
-@dataclass
-class Stats:
-
-    # TODO: 这些是不是该在 DB 那边统计？
-    new_thread_count = 0
-    affected_thread_count = 0
-    new_post_count = 0
-
-    # TODO: 这些是不是该在 API 那边统计？
-    board_request_count = 0
-    thread_request_count = 0
-    logged_in_thread_request_count = 0
-
-    total_bandwidth_usage: TotalBandwidthUsage = field(
-        default_factory=TotalBandwidthUsage)
-
-
 @dataclass(frozen=True)
 class DB:
-    """
-
-
-    TODO: 确保 actor?
-    """
 
     conn: sqlite3.Connection
 
     logger: logging.Logger = field(
         default_factory=lambda: logging.getLogger('DB'))
-
-    activity_id: int = field(init=False)
-
-    def __post_init__(self):
-        self.conn.isolation_level = None  # 禁用自动提交
-
-        cur = self.conn.cursor()
-        cur.execute(r'''
-            INSERT INTO activity (run_at, is_successful)
-            VALUES (?, ?)
-        ''', (datetime.now().timestamp(), False))
-        activity_id = cur.execute(r'''
-            SELECT id FROM activity WHERE rowid = ?
-        ''', (cur.lastrowid,)).fetchone()[0]
-        cur.close()
-        object.__setattr__(self, 'activity_id', activity_id)
-
-        self.logger.info(f'已开始新活动。活动 id = {activity_id}')
-
-    @property
-    def never_runs(self) -> bool:
-        """返回是否从未运行过一次。"""
-        never_runs = self.conn.execute(r'''
-            SELECT count(id) = 0 FROM activity 
-            WHERE is_successful = true AND ensured_fetched_until IS NOT NULL
-            ''').fetchone()[0]
-        return never_runs == 1
-
-    @property
-    def should_fetch_since(self) -> datetime:
-        should_fetch_since = self.__should_fetch_since
-        self.logger.info(
-            f'正在汇报本次活动计划的抓取时间范围下限。活动 ID = {self.activity_id}，'
-            + f'此下限 = {should_fetch_since}')
-
-        self.conn.execute(r'''
-            UPDATE activity SET fetched_since = ?
-            WHERE id = ?
-        ''', (should_fetch_since.timestamp(), self.activity_id))
-        self.conn.commit()
-
-        self.logger.info(f'已汇报本次活动计划的抓取时间范围下限。活动 ID = {self.activity_id}')
-        return should_fetch_since
-
-    @property
-    def __should_fetch_since(self) -> datetime:
-        """
-        本次应该抓取的串/回应的发布时间应该不晚于此。
-
-        不增加1秒是因为那样在极端情况下可能会有遗漏。
-        """
-        if self.never_runs:
-            # 若第一次运行，以5分钟前作为抓取的时间下界
-            return datetime.now().replace(tzinfo=local_tz) - timedelta(minutes=5)
-
-        last_activity_fetched_until = self.conn.execute(r'''
-            SELECT ensured_fetched_until FROM activity 
-            WHERE is_successful = TRUE AND ensured_fetched_until IS NOT NULL
-            ORDER BY ensured_fetched_until DESC LIMIT 1
-            ''').fetchone()[0]
-        return datetime.fromtimestamp(last_activity_fetched_until).replace(tzinfo=local_tz)
-
-    def report_ensured_fetched_until(self, ensured_fetched_until: datetime):
-        self.logger.info(
-            f'正在汇报本次活动可确保的抓取时间范围上限。活动 ID = {self.activity_id}，'
-            + f'此上限 = {ensured_fetched_until}')
-
-        self.conn.execute(r'''
-            UPDATE activity SET ensured_fetched_until = ?
-            WHERE id = ?
-        ''', (ensured_fetched_until.timestamp(), self.activity_id))
-        self.conn.commit()
-
-        self.logger.info(f'已汇报本次活动可确保的抓取时间范围上限。活动 ID = {self.activity_id}')
 
     def try_find_thread_latest_seen_reply_id(self, thread_id: int) -> Optional[int]:
         row = self.conn.execute(r'''
@@ -186,7 +78,6 @@ class DB:
                 UPDATE thread SET current_reply_count = ?
                 WHERE id = ?
             ''', (thread.total_reply_count, thread.id))
-        self.conn.commit()
 
         self.logger.info(f'已记录/更新串信息。串号 = {thread.id}')
 
@@ -265,41 +156,10 @@ class DB:
             post_raw.pop('admin', None)
         if post_raw.get('status', None) == 'n':
             post_raw.pop('status')
+        post_raw.pop('fid', None)
         if len(post_raw) == 0:
             return None
         return json.dumps(post_raw)
-
-    def report_end(self, is_successful: bool, message: Optional[str], stats: Stats):
-        total_usage = stats.total_bandwidth_usage.total
-
-        self.logger.info(
-            f'正在汇报本次活动结果。活动 ID = {self.activity_id}，成功 = {is_successful}，'
-            + f'上传字节数 = {total_usage[0]}，下载字节数 = {total_usage[1]}，'
-            + f'新记录串数 = {stats.new_thread_count}，有新增回应串数 = {stats.affected_thread_count}，'
-            + f'新记录回应数 = {stats.new_post_count}，'
-            + f'请求版块页面次数 = {stats.board_request_count}，请求串页面次数 = {stats.thread_request_count}，'
-            + f'以登录状态请求串页面次数 = {stats.logged_in_thread_request_count}')
-
-        self.conn.execute(r'''
-            UPDATE activity
-            SET is_successful = ?, message = ?,
-                uploaded_bytes = ?, downloaded_bytes = ?,
-                newly_recorded_thread_count = ?, affected_thread_count = ?,
-                newly_recorded_post_count = ?,
-                requested_board_page_count = ?, requested_thread_page_count = ?,
-                logged_in_thread_request_count = ?
-            WHERE id = ?
-        ''', (is_successful, message,
-              total_usage[0], total_usage[1],
-              stats.new_thread_count, stats.affected_thread_count,
-              stats.new_post_count,
-              stats.board_request_count, stats.thread_request_count,
-              stats.logged_in_thread_request_count,
-              self.activity_id))
-        self.conn.commit()
-
-        self.logger.info(
-            f'已汇报本次活动结果。活动 ID = {self.activity_id}')
 
     def get_thread_ids_seen_after(self, datetime: datetime) -> List[int]:
         """
@@ -327,4 +187,3 @@ class DB:
             ON CONFLICT (id) DO
                 UPDATE SET checked_at = ?, is_disappeared = ?
         ''', (thread_id, checked_at.timestamp(), value, checked_at.timestamp(), value))
-        self.conn.commit()

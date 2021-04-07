@@ -1,0 +1,65 @@
+CREATE FUNCTION create_new_activity_and_return_id(
+    in _type    text,
+    in _run_at  timestamptz DEFAULT NULL
+) RETURNS integer AS $$
+    INSERT INTO activity (type, run_at, is_successful)
+    VALUES (_type, _run_at, FALSE)
+    RETURNING id;
+    $$ LANGUAGE sql;
+
+CREATE FUNCTION never_collected()
+RETURNS boolean AS $$
+    SELECT count(id) = 0 FROM activity
+    WHERE is_successful AND collected_until IS NOT NULL;
+    $$ LANGUAGE sql;
+
+CREATE FUNCTION should_collect_since()
+RETURNS timestamptz AS $$
+    BEGIN
+        IF never_collected() THEN
+            RETURN now() - '00:05:00'::time;
+        END IF;
+
+        RETURN (
+            SELECT collected_until FROM activity 
+            WHERE is_successful = TRUE AND collected_until IS NOT NULL
+            ORDER BY collected_until DESC LIMIT 1
+        );
+    END;
+    $$ LANGUAGE plpgsql;
+
+CREATE PROCEDURE report_collecting_range(
+    in _activity_id integer,
+    in _since       timestamptz,
+    in _until       timestamptz
+) AS $$
+    UPDATE activity
+    SET collected_since = _since, collected_until = _until
+    WHERE id = _activity_id;
+    $$ LANGUAGE sql;
+
+CREATE PROCEDURE report_end(
+    in _activity_id     integer,
+
+    in _is_successful   boolean,
+    in _message         text,
+
+    in _uploaded_bytes      integer,
+    in _downloaded_bytes    integer,
+
+    in _newly_recorded_thread_count     integer,
+    in _affected_thread_count           integer,
+    in _newly_recorded_response_count   integer,
+    in _requested_board_page_count      integer,
+    in _requested_thread_page_count     integer,
+    in _logged_in_thread_request_count  integer
+) AS $$
+    UPDATE activity
+    SET is_successful = _is_successful, message = _message,
+        uploaded_bytes = _uploaded_bytes, downloaded_bytes = _downloaded_bytes,
+        newly_recorded_thread_count = _newly_recorded_thread_count, affected_thread_count = _affected_thread_count,
+        newly_recorded_response_count = _newly_recorded_response_count,
+        requested_board_page_count = _requested_board_page_count, requested_thread_page_count = _requested_thread_page_count,
+        logged_in_thread_request_count = _logged_in_thread_request_count
+    WHERE id = _activity_id
+    $$ LANGUAGE sql;
