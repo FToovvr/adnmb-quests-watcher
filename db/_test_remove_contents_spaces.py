@@ -15,7 +15,7 @@ def main():
 
     x = 0
     cur.execute(r'SELECT id, content FROM post')
-    for i, [id, content] in enumerate(cur.fetchall()):
+    for i, [id, content] in enumerate(cur):
         if i % 1000 == 0:
             print(i+1)
         with conn.cursor() as cur2:
