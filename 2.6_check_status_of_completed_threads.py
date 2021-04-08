@@ -9,7 +9,6 @@ import argparse
 from datetime import datetime, date
 import sys
 from pathlib import Path
-import sqlite3
 import re
 
 import anobbsclient

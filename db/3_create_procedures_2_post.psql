@@ -23,7 +23,28 @@ CREATE PROCEDURE update_thread_extra(
     END;
     $$ LANGUAGE plpgsql;
 
-CREATE PROCEDURE update_completion_registry_responses_id_for_threads(
+CREATE PROCEDURE update_thread_extra_current_reply_count(
+    in _id                  integer,
+    in _current_reply_count integer
+) AS $$
+    UPDATE thread_extra
+    SET current_reply_count = _current_reply_count
+    WHERE id = _id;
+    $$ LANGUAGE sql;
+
+CREATE PROCEDURE update_thread_extra_is_disappeared(
+    in _id              integer,
+    in _updated_at      timestamptz,
+    in _is_disappeared  boolean
+) AS $$
+    UPDATE thread_extra
+    SET
+        updated_at = _updated_at,
+        is_disappeared = _is_disappeared
+    WHERE id = _id;
+    $$ LANGUAGE sql;
+
+CREATE PROCEDURE update_completion_registry_response_ids_for_threads(
     in _id      integer,
     in _content text
 ) AS $$
@@ -37,11 +58,11 @@ CREATE PROCEDURE update_completion_registry_responses_id_for_threads(
         );
         FOREACH _registered_completed_thread_id IN ARRAY _registered_completed_thread_ids
         LOOP
-            INSERT INTO thread_extra (id, completion_registry_responses_id)
+            INSERT INTO thread_extra (id, completion_registry_response_ids)
             VALUES (_registered_completed_thread_id, ARRAY[_id])
             ON CONFLICT (id) DO
-            UPDATE SET completion_registry_responses_id
-                = array_append(COALESCE(thread_extra.completion_registry_responses_id, ARRAY[]::integer[]), _id);
+            UPDATE SET completion_registry_response_ids
+                = array_append(COALESCE(thread_extra.completion_registry_response_ids, ARRAY[]::integer[]), _id);
         END LOOP;
     END;
     $$ LANGUAGE plpgsql;
@@ -148,7 +169,7 @@ CREATE PROCEDURE record_post(
             CALL update_thread_extra(_id, _updated_at, _current_reply_count, _content);
         ELSE
             IF _parent_id = current_setting('fto.COMPLETION_REGISTRY_THREAD_ID')::integer THEN
-                CALL update_completion_registry_responses_id_for_threads(_id, _content);
+                CALL update_completion_registry_response_ids_for_threads(_id, _content);
             END IF;
         END IF;
 

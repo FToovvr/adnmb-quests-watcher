@@ -3,7 +3,6 @@
 from datetime import datetime, timedelta
 import os
 import subprocess
-import sqlite3
 
 from commons import local_tz, Trace, get_target_date
 
@@ -34,7 +33,7 @@ def main():
 
     with sqlite3.connect('db.sqlite3') as conn:
         has_trace = Trace.has_trace(conn=conn, date=target_date)
-        is_publication_done = Trace.is_publication_done(conn=conn, date=target_date,
+        is_report_published = Trace.is_report_published(conn=conn, date=target_date,
                                                         type_='trend')
 
     if not has_trace:
@@ -44,7 +43,7 @@ def main():
         ])
         assert(result.returncode == 0)
 
-    if not is_publication_done:
+    if not is_report_published:
         result = subprocess.run([
             './3_generate_text_report.py', target_date.isoformat(),
             '--check-sage',

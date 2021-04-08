@@ -9,7 +9,6 @@ import argparse
 from datetime import datetime, date, timedelta
 import sys
 from pathlib import Path
-import sqlite3
 
 import anobbsclient
 from anobbsclient.walk import create_walker, BoardWalkTarget
@@ -93,7 +92,7 @@ def rescan_board(args: argparse.Namespace, db: DB, client: anobbsclient.Client, 
     # 用于检测当天消失的串，
     # 但如果当天消失的串最后上浮的时间在当天之前，就无法检测到了
 
-    thread_ids_seen_today = set(db.get_thread_ids_seen_after(args.since))
+    thread_ids_seen_today = set(db.get_thread_ids_seen_since(args.since))
 
     walker = create_walker(
         target=BoardWalkTarget(

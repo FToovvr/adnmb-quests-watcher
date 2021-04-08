@@ -8,7 +8,6 @@ import argparse
 from pathlib import Path
 import sys
 import os
-import sqlite3
 from datetime import datetime, timedelta, time, date
 import logging
 import logging.config

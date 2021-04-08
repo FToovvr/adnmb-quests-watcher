@@ -1,0 +1,31 @@
+-- 可能返回 NULL
+CREATE FUNCTION find_thread_latest_seen_response_id(in _thread_id integer)
+RETURNS integer AS $$
+    SELECT id FROM response WHERE parent_thread_id = _thread_id
+    ORDER BY id DESC LIMIT 1;
+$$ LANGUAGE sql;
+
+CREATE FUNCTION get_thread_total_response_count(in _thread_id integer)
+RETURNS integer AS $$
+    SELECT current_reply_count FROM thread
+    WHERE id = _thread_id;
+$$ LANGUAGE sql;
+
+CREATE FUNCTION is_thread_in_database(in _thread_id integer)
+RETURNS boolean AS $$
+    SELECT count(id) != 0 FROM thread WHERE id = _thread_id;
+$$ LANGUAGE sql;
+
+CREATE FUNCTION get_thread_ids_seen_since(in _time timestamptz)
+RETURNS integer[] AS $$
+    SELECT ARRAY_AGG(DISTINCT thread.id)
+    FROM thread
+    JOIN post ON thread.id = post.parent_thread_id
+    WHERE thread.created_at >= _time OR post.created_at >= _time
+$$ LANGUAGE sql;
+
+CREATE FUNCTION is_thread_disappeared(in _thread_id integer)
+RETURNS boolean AS $$
+    SELECT COALESCE(is_disappeared, FALSE) FROM thread_extra
+    WHERE id = _thread_id;
+$$ LANGUAGE sql;

@@ -100,11 +100,11 @@ def migrate_activity_table(conn_s3: sqlite3.Connection, conn_pg: psycopg2._psyco
             print(f"activity: {i+1}/{n} {ts2dt(run_at)}")
 
 
-def remove_fid_field(misc_fields: Optional[str]) -> Optional[str]:
+def remove_field(misc_fields: Optional[str], field_name: str) -> Optional[str]:
     if misc_fields is None:
         return None
     misc_fields = json.loads(misc_fields)
-    misc_fields.pop('fid', None)
+    misc_fields.pop(field_name, None)
     if len(misc_fields) == 0:
         return None
     else:
@@ -153,7 +153,7 @@ def migrate_thread_table(conn_s3: sqlite3.Connection, conn_pg: psycopg2._psycopg
                 updated_at = ts2dt(last[1])
             else:
                 updated_at = find_updated_at(conn_s3, id, None)
-            misc_fields = remove_fid_field(misc_fields)
+            misc_fields = remove_field(misc_fields, 'fid')
             cur_pg.execute(r'''
                 CALL record_thread(''' + ', '.join([r'%s']*13) + r''')
                 ''', (
@@ -180,7 +180,7 @@ def migrate_thread_table(conn_s3: sqlite3.Connection, conn_pg: psycopg2._psycopg
                 LEFT JOIN thread_old_revision ON thread.id = thread_old_revision.id
                 GROUP BY thread.id
             '''):
-            misc_fields = remove_fid_field(misc_fields)
+            misc_fields = remove_field(misc_fields, 'fid')
             cur_pg.execute(r'''
                 CALL record_thread(''' + ', '.join([r'%s']*13) + r''')
                 ''', (
@@ -202,14 +202,14 @@ def migrate_post_table(conn_s3: sqlite3.Connection, conn_pg: psycopg2._psycopg.c
         for i, [
             id, parent_thread_id, created_at, user_id, content,
             attachment_base, attachment_extension,
-            name, email, title, misc_fields,
+            name, email, title, _,  # misc_fields,
         ] in enumerate(conn_s3.execute(r'SELECT * FROM post')):
             cur_pg.execute(r'''
                 CALL record_response(''' + ', '.join([r'%s']*12) + r''')
                 ''', (
                 id, parent_thread_id, ts2dt(created_at), user_id, content,
                 attachment_base, attachment_extension,
-                name, email, title, misc_fields,
+                name, email, title, None,  # 迁移前的代码不小心会以主串的 misc_fields 作为回应的 misc_fields
                 None,
             ))
             if i % 100 == 0:

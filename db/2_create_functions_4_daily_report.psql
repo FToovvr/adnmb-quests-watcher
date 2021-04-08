@@ -131,7 +131,7 @@ CREATE FUNCTION get_meta_stats(
         COALESCE(sum(uploaded_bytes), 0), COALESCE(sum(downloaded_bytes), 0),
         COALESCE(sum(requested_board_page_count), 0), COALESCE(sum(requested_thread_page_count), 0)
     FROM activity
-    WHERE in_boundaries(fetched_since, _lower_bound, _upper_bound);
+    WHERE in_boundaries(collected_since, _lower_bound, _upper_bound);
     $$ LANGUAGE sql;
 
 CREATE FUNCTION get_tail_count(

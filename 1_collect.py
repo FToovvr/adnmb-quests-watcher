@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 import traceback
 
 import os
-import sqlite3
 from datetime import datetime, timedelta
 import json
 import logging

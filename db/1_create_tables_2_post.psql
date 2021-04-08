@@ -56,7 +56,7 @@ CREATE TABLE thread_extra (
     is_disappeared      boolean DEFAULT FALSE,
 
     has_blue_texts                      boolean,
-    completion_registry_responses_id    integer[],
+    completion_registry_response_ids    integer[],
 
     PRIMARY KEY (id),
     FOREIGN KEY (id) REFERENCES post (id)
@@ -64,7 +64,7 @@ CREATE TABLE thread_extra (
 
 CREATE VIEW thread AS
     SELECT post.id, effective_at_least_from, parent_board_id, created_at, user_id, content, attachment_base, attachment_extension, name, email, title, misc_fields,
-        updated_at, current_reply_count, is_disappeared, has_blue_texts, completion_registry_responses_id
+        updated_at, current_reply_count, is_disappeared, has_blue_texts, completion_registry_response_ids
     FROM post
     LEFT JOIN thread_extra ON thread_extra.id = post.id
     WHERE parent_board_id IS NOT NULL;
