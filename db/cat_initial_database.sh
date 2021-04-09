@@ -2,6 +2,8 @@
 
 set -e
 
+cd "$(dirname "${BASH_SOURCE[0]}")/sql"
+
 for i in $(seq 1 3); do
     cat 1_create_tables_${i}_*.psql
     echo
