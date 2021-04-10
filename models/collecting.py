@@ -10,8 +10,12 @@ import psycopg2
 
 import anobbsclient
 
-# pylint: disable=relative-beyond-top-level
-from ..commons.consts import local_tz
+
+import sys
+sys.path.append("..")  # noqa
+
+# pylint: disable=import-error
+from commons.consts import local_tz
 
 
 @dataclass(frozen=True)
@@ -19,37 +23,66 @@ class DB:
 
     conn: psycopg2._psycopg.connection
 
+    completion_registry_thread_id: int
+
     logger: logging.Logger = field(
         default_factory=lambda: logging.getLogger('DB'))
+
+    def __post_init__(self):
+        with self.conn.cursor() as cur:
+            cur: psycopg2._psycopg.cursor = cur
+            cur.execute(
+                r'''SELECT set_config('fto.MIGRATING', %s::text, FALSE)''', (True,))
+            cur.execute(
+                r'''SELECT set_config('fto.COMPLETION_REGISTRY_THREAD_ID', %s::text, FALSE)''',
+                (self.completion_registry_thread_id,))
+
+    @staticmethod
+    def never_collected(conn: psycopg2._psycopg.connection) -> bool:
+        with conn.cursor() as cur:
+            cur: psycopg2._psycopg.cursor = cur
+            cur.execute(r'SELECT * FROM never_collected()')
+            return cur.fetchone()[0]
+
+    @property
+    def should_collect_since(self) -> datetime:
+        # XXX: 原来调用这里会同时更新 `fetched_since`，
+        # 现在 `fetched_since` 会在 `report_end` 时再更新
+        with self.conn.cursor() as cur:
+            cur: psycopg2._psycopg.cursor = cur
+            cur.execute(r'SELECT * FROM should_collect_since()')
+            return cur.fetchone()[0]
 
     def try_find_thread_latest_seen_reply_id(self, thread_id: int) -> Optional[int]:
         with self.conn.cursor() as cur:
             cur: psycopg2._psycopg.cursor = cur
             cur.execute(r'''SELECT find_thread_latest_seen_response_id(%s)''',
                         (thread_id,))
-            row = cur.fetchall()
-        if row is None:
-            return None
+            return cur.fetchone()[0]
 
-        return row[0]
+    def record_thread(self, thread: anobbsclient.ThreadPage, board_id: int, updated_at: datetime):
+        """
+        NOTE
+        ----
+        暂不在这里更新串的总回应数。
+        """
 
-    def record_thread(self, thread: anobbsclient.ThreadPage, board_id: int, record_total_reply_count: bool = True):
         self.logger.info(f'正在记录/更新串信息。串号 = {thread.id}')
-        updated_at = _updated_at,
 
         with self.conn.cursor() as cur:
             cur: psycopg2._psycopg.cursor = cur
-            cur.execute(r'CALL record_thread(' + ', '.join(['%s' * 13]) + r')', (
+            cur.execute(r'CALL record_thread(' + ', '.join(['%s'] * 13) + r')', (
                 thread.id, board_id, thread.created_at, thread.user_id, thread.content,
                 thread.attachment_base, thread.attachment_extension,
-                thread.name, thread.email, thread.title, DB.__extract_misc_fields(thread)),
-                thread.total_reply_count, updated_at,
+                thread.name, thread.email, thread.title,
+                DB.__extract_misc_fields(thread),
+                thread.total_reply_count, updated_at,)
             )
 
         self.logger.info(f'已记录/更新串信息。串号 = {thread.id}')
 
-    def record_thread_replies(self, thread: anobbsclient.BoardThread,
-                              replies: List[anobbsclient.Post], total_reply_count: int):
+    def record_thread_replies(self, thread: anobbsclient.BoardThread, replies: List[anobbsclient.Post],
+                              total_reply_count: int, updated_at: dataclass):
         """
         记录串中新抓取到的回应。
 
@@ -79,11 +112,12 @@ class DB:
                         (thread.id, total_reply_count))
 
             for post in replies:
-                cur.execute(r'CALL record_response(' + ', '.join(['%s' * 12]) + r')', (
+                cur.execute(r'CALL record_response(' + ', '.join(['%s'] * 12) + r')', (
                     post.id, thread.id, post.created_at, post.user_id, post.content,
                     post.attachment_base, post.attachment_extension,
-                    post.name, post.email, post.title, DB.__extract_misc_fields(post)),
-                    updated_at,
+                    post.name, post.email, post.title,
+                    DB.__extract_misc_fields(post),
+                    updated_at)
                 )
 
         self.logger.info(f'已记录串中新抓取到的回应。串号 = {thread.id}')
@@ -141,3 +175,10 @@ class DB:
             cur: psycopg2._psycopg.cursor = cur
             cur.execute(r'CALL update_thread_extra_is_disappeared(%s, %s, %s)',
                         (thread_id, checked_at, value))
+
+    def get_thread_ids_in_completion_registry_thread_without_blue_texts(self) -> List[int]:
+        with self.conn.cursor() as cur:
+            cur: psycopg2._psycopg.cursor = cur
+            cur.execute(
+                r'SELECT * FROM get_thread_ids_in_completion_registry_thread_without_blue_texts()')
+            return cur.fetchone()[0]

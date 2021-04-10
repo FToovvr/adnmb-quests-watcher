@@ -63,3 +63,11 @@ CREATE PROCEDURE report_end(
         logged_in_thread_request_count = _logged_in_thread_request_count
     WHERE id = _activity_id
     $$ LANGUAGE sql;
+
+CREATE FUNCTION get_last_activity_run_at(in _type text)
+RETURNS timestamptz AS $$
+    SELECT run_at FROM activity
+    WHERE type = _type
+    ORDER BY run_at DESC
+    LIMIT 1;
+    $$ LANGUAGE sql;

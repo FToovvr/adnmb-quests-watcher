@@ -58,6 +58,7 @@ class Config:
     board_id: int
     trend_thread_id: Optional[int]
     daily_qst_thread_id: Optional[int]
+    completion_registry_thread_id: int
 
     database: DatabaseConfig
     client: Optional[ClientConfig]
@@ -103,6 +104,7 @@ def load_config(path: Path) -> Config:
             board_id=consts['board-id'],
             trend_thread_id=consts['trend-thread-id'],
             daily_qst_thread_id=consts['daily-qst-thread-id'],
+            completion_registry_thread_id=consts['completion-registry-thread-id'],
 
             database=database,
             client=client,

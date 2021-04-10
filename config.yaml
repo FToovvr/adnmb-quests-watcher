@@ -9,6 +9,9 @@ consts:
   # 跑团日报串号。趋势报告发布之后会通知这里；此外报告中也会包含当天日报回应的串号
   daily-qst-thread-id: 20311039
 
+  # 完结登记处的串号（至今即为「跑团版务集中串」）
+  completion-registry-thread-id: 22762342
+
 database:
   host: pi
   dbname: adnmb_qst_watcher

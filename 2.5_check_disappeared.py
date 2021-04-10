@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from typing import List
+from dataclasses import dataclass
 import traceback
 
 import logging
@@ -10,16 +11,31 @@ from datetime import datetime, date, timedelta
 import sys
 from pathlib import Path
 
+import psycopg2
+
 import anobbsclient
 from anobbsclient.walk import create_walker, BoardWalkTarget
 
-from commons import local_tz, get_client, get_target_date
-from commons.updating_model import DB, Stats
+from commons.consts import local_tz, get_target_date
+from commons.config import load_config, ClientConfig
+from models.activity import Activity, Stats
+from models.collecting import DB
 
 logging.config.fileConfig('logging.2.5_check_status_of_threads.conf')
 
 
-def parse_args(args: List[str]) -> argparse.Namespace:
+@dataclass(frozen=True)
+class Arguments:
+    since: datetime
+    board_id: int
+    completion_registry_thread_id: int  # 其实不需要
+
+    connection_string: str
+
+    client_config: ClientConfig
+
+
+def parse_args(args: List[str]) -> Arguments:
     parser = argparse.ArgumentParser(
         description="检查截止到指定位置活动过的主题串是否仍然存在。"
     )
@@ -31,16 +47,9 @@ def parse_args(args: List[str]) -> argparse.Namespace:
             "省缺则为四个小时前的前一天的上午4时",
         ]),
     )
-    parser.add_argument(
-        '--board-id', type=int, required=True, dest='board_id',
-        help="版块 ID",
-    )
-    parser.add_argument(
-        '--db-path', type=Path, required=True, dest='db_path',
-        help="DB 所在的路径",
-    )
 
     parsed = parser.parse_args(args)
+    config = load_config('./config.yaml')
 
     if parsed.since is None:
         parsed.since = get_target_date().isoformat()
@@ -52,21 +61,28 @@ def parse_args(args: List[str]) -> argparse.Namespace:
         parsed.since = datetime.fromisoformat(
             f'{parsed.since} 04:00:00').replace(tzinfo=local_tz)
 
-    return parsed
+    return Arguments(
+        since=parsed.since,
+        board_id=config.board_id,
+        completion_registry_thread_id=config.completion_registry_thread_id,
+        connection_string=config.database.connection_string,
+        client_config=config.client,
+    )
 
 
 def main():
 
     args = parse_args(sys.argv[1:])
-    if not args.db_path.exists():
-        logging.critical(f"{args.db_path} 不存在，将终止")
-        exit(1)
 
-    client = get_client()
+    client = args.client_config.create_client()
 
-    with sqlite3.connect(args.db_path) as conn:
-
-        db = DB(conn=conn)
+    with psycopg2.connect(args.connection_string) as conn_activity, \
+            psycopg2.connect(args.connection_string) as conn_db:
+        activity = Activity(conn=conn_activity,
+                            activity_type='check_disappeared',
+                            run_at=datetime.now(tz=local_tz))
+        db = DB(conn=conn_db,
+                completion_registry_thread_id=args.completion_registry_thread_id)
 
         stats = Stats()
 
@@ -80,7 +96,7 @@ def main():
             message = exc_text
             is_successful = False
         finally:
-            db.report_end(is_successful, message, stats)
+            activity.report_end(is_successful, message, stats)
 
     if is_successful:
         logging.info("成功结束")
@@ -111,7 +127,7 @@ def rescan_board(args: argparse.Namespace, db: DB, client: anobbsclient.Client, 
 
         for thread in page:
             thread_ids_seen_today.discard(thread.id)
-            db.record_thread(thread)
+            db.record_thread(thread, board_id=args.board_id, updated_at=now)
             db.report_is_thread_disappeared(thread.id, now, False)
 
     for not_found_thread_id in thread_ids_seen_today:

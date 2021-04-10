@@ -13,7 +13,7 @@ import anobbsclient
 import sys
 sys.path.append("..")  # noqa
 
-# pylint: disable=relative-beyond-top-level
+# pylint: disable=import-error
 from commons.consts import local_tz, ZWSP, OMITTING
 
 

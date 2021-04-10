@@ -60,7 +60,17 @@ CREATE FUNCTION thread_got_new_blue_texts_between(
             RETURN TRUE;
         END IF;
 
-        RETURN _blue_text_after != _blue_text_before;
+        RETURN _blue_text_after::text[] != _blue_text_before::text[];
 
     END
     $$ LANGUAGE plpgsql;
+
+-- XXX: 没有为这部分专门建索引。
+-- 目前快一个月，1000 多个主串，查询也只要 5ms
+CREATE FUNCTION get_thread_ids_in_completion_registry_thread_without_blue_texts()
+RETURNS integer[] AS $$
+    SELECT COALESCE(ARRAY_AGG(id), ARRAY[]::integer[]) FROM thread
+    WHERE completion_registry_response_ids IS NOT NULL AND cardinality(completion_registry_response_ids) > 0
+        AND NOT COALESCE(is_disappeared, FALSE)
+        AND NOT COALESCE(has_blue_texts, FALSE);
+    $$ LANGUAGE sql;

@@ -12,42 +12,50 @@ import logging
 import logging.config
 import traceback
 
+import psycopg2
+
 import anobbsclient
 from anobbsclient.walk import create_walker, BoardWalkTarget, ReversalThreadWalkTarget
 
-# pylint: disable=import-error
-from commons import get_client, local_tz
-from commons.updating_model import TotalBandwidthUsage, Stats, DB
+from commons.consts import local_tz
+from commons.config import load_config
+from models.activity import Activity, TotalBandwidthUsage, Stats
+from models.collecting import DB
+
 
 # 默认单线程
 
 logging.config.fileConfig('logging.1_collect.conf')
 
-BOARD_ID = 111  # 跑团版
-
 
 def main():
 
-    with sqlite3.connect('db.sqlite3') as conn:
+    config = load_config('./config.yaml')
 
-        db = DB(conn=conn)
+    with psycopg2.connect(config.database.connection_string) as conn_activity, \
+            psycopg2.connect(config.database.connection_string) as conn_db:
+        activity = Activity(conn=conn_activity,
+                            activity_type='collect',
+                            run_at=datetime.now(tz=local_tz))
+        db = DB(conn=conn_db,
+                completion_registry_thread_id=config.completion_registry_thread_id)
 
         stats = Stats()
 
-        fetching_since = db.should_fetch_since
+        fetching_since = db.should_collect_since
 
         is_successful = False
         message = None
         try:
-            fetch_board(db, fetching_since=fetching_since,
-                        stats=stats)
+            fetch_board(db=db, activity=activity, client=config.client.create_client(),
+                        board_id=config.board_id, fetching_since=fetching_since, stats=stats)
             is_successful = True
         except:
             exc_text = traceback.format_exc()
             logging.critical(exc_text)
             message = exc_text
         finally:
-            db.report_end(is_successful, message, stats)
+            activity.report_end(is_successful, message, stats)
 
     if is_successful:
         logging.info("成功结束")
@@ -55,15 +63,14 @@ def main():
         exit(1)
 
 
-def fetch_board(db: DB, fetching_since: datetime, stats: Stats):
+def fetch_board(db: DB, activity: Activity, client: anobbsclient.Client,
+                board_id: int, fetching_since: datetime, stats: Stats):
 
     logger = logging.getLogger('FETCH')
 
-    client = get_client()
-
     walker = create_walker(
         target=BoardWalkTarget(
-            board_id=BOARD_ID,
+            board_id=board_id,
             start_page_number=1,
             stop_before_datetime=fetching_since,
         ),
@@ -81,20 +88,23 @@ def fetch_board(db: DB, fetching_since: datetime, stats: Stats):
     logger.info(f'完成获取版块。总共纳入串数 = {len(threads_on_board)}，'
                 + f'期间 (上传字节数, 下载字节数) = {bandwidth_usage_for_board.total}')
 
+    now = datetime.now(tz=local_tz)
+
     for (i, thread) in enumerate(threads_on_board):
         logger.debug(f'串 #{i}。串号 = {thread.id}，'
                      + f'最后修改时间 = {thread.last_modified_time}')
 
         if is_first_found_thread:
             is_first_found_thread = False
-            db.report_ensured_fetched_until(thread.last_modified_time)
+            activity.report_collecting_range(
+                since=fetching_since, until=thread.last_modified_time)
 
         is_thread_recorded = db.is_thread_recorded(thread.id)
         if not is_thread_recorded:
             stats.new_thread_count += 1
         # 记录或更新串
         # current_reply_count 在后面一同记录
-        db.record_thread(thread, record_total_reply_count=False)
+        db.record_thread(thread, board_id=board_id, updated_at=now)
 
         if len(thread.replies) == 0:
             assert(thread.total_reply_count == 0)
@@ -115,18 +125,19 @@ def fetch_board(db: DB, fetching_since: datetime, stats: Stats):
             logger.debug(f'串 #{i} 是之前曾未抓取过的串，'
                          + f'将会通过规定的下界时间作为范围的下界')
 
+        new_responses_in_preview = list(
+            [post for post in thread.replies if is_target(post)])
         if thread.total_reply_count <= 5 \
                 or not is_target(thread.replies[0]):
             # 要抓取的内容全在预览里，不用再进串里去翻了
             # TODO 判断是否没有剩余回应（len(thread.total_reply_count) <= 5）应该在 API 那边进行
-            targets = list(
-                [post for post in thread.replies if is_target(post)])
-            if len(targets) > 0:
+            if len(new_responses_in_preview) > 0:
                 if is_thread_recorded:
                     stats.affected_thread_count += 1
-                stats.new_post_count += len(targets)
-            db.record_thread_replies(
-                thread=thread, replies=targets, total_reply_count=thread.total_reply_count)
+                stats.new_post_count += len(new_responses_in_preview)
+            db.record_thread_replies(thread=thread, replies=new_responses_in_preview,
+                                     total_reply_count=thread.total_reply_count,
+                                     updated_at=now)
             logger.debug(f'串 #{i} 由于全部需要抓取的回应已在预览之中，记录后到此结束。')
         else:
             # 反向遍历
@@ -197,6 +208,7 @@ def fetch_board(db: DB, fetching_since: datetime, stats: Stats):
             bandwidth_usage_for_thread = TotalBandwidthUsage()
             thread_walk_page_count = 0
             for (pn, page, usage) in walker:
+
                 thread_walk_page_count += 1
                 stats.thread_request_count += 1
                 if client.thread_page_requires_login(pn):
@@ -207,8 +219,11 @@ def fetch_board(db: DB, fetching_since: datetime, stats: Stats):
                 if final_reply_count is None:
                     final_reply_count = page.body.total_reply_count
                 targets += page.replies
-            db.record_thread_replies(
-                thread=thread, replies=targets, total_reply_count=final_reply_count)
+            targets += new_responses_in_preview
+            now_after_fetching_inside_thread = datetime.now(tz=local_tz)
+            db.record_thread_replies(thread=thread, replies=targets,
+                                     total_reply_count=final_reply_count,
+                                     updated_at=now_after_fetching_inside_thread)
             stats.total_bandwidth_usage.add(bandwidth_usage_for_thread.total)
             if len(targets) > 0:
                 if is_thread_recorded:

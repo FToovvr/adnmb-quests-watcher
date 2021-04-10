@@ -54,6 +54,14 @@ class Activity:
 
     activity_id: int = field(init=False)
 
+    @staticmethod
+    def get_last_activity_run_at(conn: psycopg2._psycopg.connection, activity_type: str):
+        with conn.cursor() as cur:
+            cur: psycopg2._psycopg.cursor = cur
+            cur.execute(r'SELECT get_last_activity_run_at(%s)',
+                        (activity_type,))
+            return cur.fetchone()[0]
+
     def __post_init__(self):
         with self.conn.cursor() as cur:
             cur: psycopg2._psycopg.cursor = cur
@@ -62,23 +70,8 @@ class Activity:
             object.__setattr__(self, 'activity_id', cur.fetchone()[0])
 
         if self.logger:
-            self.logger.info(f'已开始新活动。活动 id = {self.activity_id}')
-
-    @staticmethod
-    def never_collected(conn: psycopg2._psycopg.connection) -> bool:
-        with conn.cursor() as cur:
-            cur: psycopg2._psycopg.cursor = cur
-            cur.execute(r'SELECT * FROM never_collected()')
-            return cur.fetchone()[0]
-
-    @property
-    def should_collect_since(self) -> datetime:
-        # XXX: 原来调用这里会同时更新 `fetched_since`，
-        # 现在 `fetched_since` 会在 `report_end` 时再更新
-        with self.conn.cursor() as cur:
-            cur: psycopg2._psycopg.cursor = cur
-            cur.execute(r'SELECT * FROM should_collect_since()')
-            return cur.fetchone()[0]
+            self.logger.info(f'已开始新活动。活动 id = {self.activity_id}，'
+                             + f'活动类型 = {self.activity_type}')
 
     def report_collecting_range(self, since: datetime, until: datetime):
         if self.logger:

@@ -24,7 +24,7 @@ from anobbsclient.walk import create_walker, ReversalThreadWalkTarget
 
 from commons.consts import local_tz, ZWSP, OMITTING, get_target_date
 from commons.config import load_config, ClientConfig
-from models.stat import ThreadStats, Counts, Stats, DB
+from models.analyzing import ThreadStats, Counts, Stats, DB
 from models.publication_record import PublicationRecord
 from commons.debugging import super_huge_thread_pg
 
@@ -46,7 +46,7 @@ class Arugments:
     notify_target: Union[
         None,
         Literal['daily_qst_thread'],
-        Literal['trend_thread']
+        Literal['trend_thread'],
     ]
 
     page_capacity: int
@@ -186,7 +186,7 @@ def parse_args(args: List[str]) -> Arugments:
     else:
         notify_target = 'daily_qst_thread' if parsed.notify_daily_qst_thread else None
 
-    args_obj = Arugments(
+    return Arugments(
         target_date=parsed.target_date,
 
         check_sage=parsed.check_sage,
@@ -207,10 +207,9 @@ def parse_args(args: List[str]) -> Arugments:
         client_config=config.client,
     )
 
-    return args_obj
-
-
 # 收录条件
+
+
 def RANK_INCLUDING(thread: ThreadStats, including: Including,
                    threads: List[ThreadStats], counts: Counts,):
     if including.method == 'top':

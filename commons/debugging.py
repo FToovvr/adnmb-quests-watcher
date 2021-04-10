@@ -3,7 +3,7 @@ from datetime import datetime
 import sys
 sys.path.append("..")  # noqa
 
-from models.stat import ThreadStats
+from models.analyzing import ThreadStats
 
 
 super_huge_thread_pg = ThreadStats(
