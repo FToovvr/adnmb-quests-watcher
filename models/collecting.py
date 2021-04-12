@@ -7,6 +7,7 @@ import json
 import traceback
 
 import psycopg2
+import psycopg2.extras
 
 import anobbsclient
 
@@ -32,26 +33,10 @@ class DB:
         with self.conn.cursor() as cur:
             cur: psycopg2._psycopg.cursor = cur
             cur.execute(
-                r'''SELECT set_config('fto.MIGRATING', %s::text, FALSE)''', (True,))
+                r'''SELECT set_config('fto.MIGRATING', %s::text, FALSE)''', (False,))
             cur.execute(
                 r'''SELECT set_config('fto.COMPLETION_REGISTRY_THREAD_ID', %s::text, FALSE)''',
                 (self.completion_registry_thread_id,))
-
-    @staticmethod
-    def never_collected(conn: psycopg2._psycopg.connection) -> bool:
-        with conn.cursor() as cur:
-            cur: psycopg2._psycopg.cursor = cur
-            cur.execute(r'SELECT * FROM never_collected()')
-            return cur.fetchone()[0]
-
-    @property
-    def should_collect_since(self) -> datetime:
-        # XXX: 原来调用这里会同时更新 `fetched_since`，
-        # 现在 `fetched_since` 会在 `report_end` 时再更新
-        with self.conn.cursor() as cur:
-            cur: psycopg2._psycopg.cursor = cur
-            cur.execute(r'SELECT * FROM should_collect_since()')
-            return cur.fetchone()[0]
 
     def try_find_thread_latest_seen_reply_id(self, thread_id: int) -> Optional[int]:
         with self.conn.cursor() as cur:
@@ -73,11 +58,11 @@ class DB:
             cur: psycopg2._psycopg.cursor = cur
             cur.execute(r'CALL record_thread(' + ', '.join(['%s'] * 13) + r')', (
                 thread.id, board_id, thread.created_at, thread.user_id, thread.content,
-                thread.attachment_base, thread.attachment_extension,
-                thread.name, thread.email, thread.title,
-                DB.__extract_misc_fields(thread),
-                thread.total_reply_count, updated_at,)
-            )
+                thread.attachment_base or '', thread.attachment_extension or '',
+                thread.name or '', thread.email or '', thread.title or '',
+                DB.__extract_misc_fields(thread) or psycopg2.extras.Json(None),
+                thread.total_reply_count, updated_at,
+            ))
 
         self.logger.info(f'已记录/更新串信息。串号 = {thread.id}')
 
@@ -114,9 +99,10 @@ class DB:
             for post in replies:
                 cur.execute(r'CALL record_response(' + ', '.join(['%s'] * 12) + r')', (
                     post.id, thread.id, post.created_at, post.user_id, post.content,
-                    post.attachment_base, post.attachment_extension,
-                    post.name, post.email, post.title,
-                    DB.__extract_misc_fields(post),
+                    post.attachment_base or '', post.attachment_extension or '',
+                    post.name or '', post.email or '', post.title or '',
+                    DB.__extract_misc_fields(
+                        post) or psycopg2.extras.Json(None),
                     updated_at)
                 )
 

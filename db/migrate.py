@@ -7,6 +7,7 @@ import json
 
 import sqlite3
 import psycopg2
+import psycopg2.extras
 
 from datetime import datetime, date
 from dateutil import tz
@@ -158,8 +159,9 @@ def migrate_thread_table(conn_s3: sqlite3.Connection, conn_pg: psycopg2._psycopg
                 CALL record_thread(''' + ', '.join([r'%s']*13) + r''')
                 ''', (
                 id, QST_BOARD_ID, ts2dt(created_at), user_id, content,
-                attachment_base, attachment_extension,
-                name, email, title, misc_fields,
+                attachment_base or '', attachment_extension or '',
+                name or '', email or '', title or '',
+                misc_fields or psycopg2.extras.Json(None),
                 None,
                 updated_at,
             ))
@@ -185,8 +187,9 @@ def migrate_thread_table(conn_s3: sqlite3.Connection, conn_pg: psycopg2._psycopg
                 CALL record_thread(''' + ', '.join([r'%s']*13) + r''')
                 ''', (
                 id, QST_BOARD_ID, ts2dt(created_at), user_id, content,
-                attachment_base, attachment_extension,
-                name, email, title, misc_fields,
+                attachment_base or '', attachment_extension or '',
+                name or '', email or '', title or '',
+                misc_fields or psycopg2.extras.Json(None),
                 current_reply_count,
                 find_updated_at(conn_s3, id, ts2dt(
                     current_revision_checked_at)),
@@ -208,8 +211,10 @@ def migrate_post_table(conn_s3: sqlite3.Connection, conn_pg: psycopg2._psycopg.c
                 CALL record_response(''' + ', '.join([r'%s']*12) + r''')
                 ''', (
                 id, parent_thread_id, ts2dt(created_at), user_id, content,
-                attachment_base, attachment_extension,
-                name, email, title, None,  # 迁移前的代码不小心会以主串的 misc_fields 作为回应的 misc_fields
+                attachment_base or '', attachment_extension or '',
+                name or '', email or '', title or '',
+                # 迁移前的代码不小心会以主串的 misc_fields 作为回应的 misc_fields
+                psycopg2.extras.Json(None),
                 None,
             ))
             if i % 100 == 0:

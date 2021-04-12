@@ -42,7 +42,7 @@ def main():
 
         stats = Stats()
 
-        fetching_since = db.should_collect_since
+        fetching_since = activity.should_collect_since
 
         is_successful = False
         message = None

@@ -16,13 +16,13 @@ CREATE TABLE post (
     user_id     text        NOT NULL,
 
     content                 text    NOT NULL,
-    attachment_base         text,
-    attachment_extension    text,
-    name                    text,
-    email                   text,
-    title                   text,
+    attachment_base         text    NOT NULL    DEFAULT '',
+    attachment_extension    text    NOT NULL    DEFAULT '',
+    name                    text    NOT NULL    DEFAULT '',
+    email                   text    NOT NULL    DEFAULT '',
+    title                   text    NOT NULL    DEFAULT '',
 
-    misc_fields             jsonb,
+    misc_fields             jsonb   NOT NULL    DEFAULT 'null'::jsonb,
 
     PRIMARY KEY (id),
     CHECK (
@@ -83,12 +83,12 @@ CREATE TABLE thread_old_revision (
     created_at              timestamptz NOT NULL,
     user_id                 text        NOT NULL,
     content                 text        NOT NULL,
-    attachment_base         text,
-    attachment_extension    text,
-    name                    text,
-    email                   text,
-    title                   text,
-    misc_fields             jsonb,
+    attachment_base         text        NOT NULL    DEFAULT '',
+    attachment_extension    text        NOT NULL    DEFAULT '',
+    name                    text        NOT NULL    DEFAULT '',
+    email                   text        NOT NULL    DEFAULT '',
+    title                   text        NOT NULL    DEFAULT '',
+    misc_fields             jsonb       NOT NULL    DEFAULT 'null'::jsonb,
 
     -- 旧版只记载了正文、名称、邮箱地址和标题的变化，其他列都是假定没有变化而补上去的
     is_not_complete BOOLEAN DEFAULT FALSE,
