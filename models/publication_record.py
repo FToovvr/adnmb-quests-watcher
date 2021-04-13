@@ -91,7 +91,7 @@ class PublicationRecord:
                     reply_post_id=row[1],
                     reply_offset=row[2],
                 ))
-                return posts
+        return posts
 
     def report_thread_id_and_reply_count(self, thread_id: int, reply_count: int):
         with self.conn.cursor() as cur:

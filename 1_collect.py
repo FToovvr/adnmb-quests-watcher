@@ -5,6 +5,8 @@ from typing import Optional, Dict, List, Any
 from dataclasses import dataclass, field
 import traceback
 
+import argparse
+import sys
 import os
 from datetime import datetime, timedelta
 import json
@@ -28,9 +30,33 @@ from models.collecting import DB
 logging.config.fileConfig('logging.1_collect.conf')
 
 
+@dataclass(frozen=True)
+class Arguments:
+    config_file_path: str
+
+
+def parse_args(args: List[str]) -> Arguments:
+    parser = argparse.ArgumentParser(
+        description='采集版块内容。',
+    )
+
+    parser.add_argument(
+        '-c', '--config', type=str, default='./config.yaml',
+        dest='config_file_path',
+        help='配置文件路径',
+    )
+
+    parsed = parser.parse_args(args)
+
+    return Arguments(
+        config_file_path=parsed.config_file_path,
+    )
+
+
 def main():
 
-    config = load_config('./config.yaml')
+    args = parse_args(sys.argv[1:])
+    config = load_config(args.config_file_path)
 
     with psycopg2.connect(config.database.connection_string) as conn_activity, \
             psycopg2.connect(config.database.connection_string) as conn_db:

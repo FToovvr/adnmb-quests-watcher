@@ -26,6 +26,8 @@ logging.config.fileConfig('logging.2.5_check_status_of_threads.conf')
 
 @dataclass(frozen=True)
 class Arguments:
+    config_file_path: str
+
     since: datetime
     board_id: int
     completion_registry_thread_id: int  # 其实不需要
@@ -41,6 +43,12 @@ def parse_args(args: List[str]) -> Arguments:
     )
 
     parser.add_argument(
+        '-c', '--config', type=str, default='./config.yaml',
+        dest='config_file_path',
+        help='配置文件路径',
+    )
+
+    parser.add_argument(
         'since', type=str, nargs='?',
         help='\n'.join([
             "截止到的日期或日期+时间，格式为 RFC 3339。",
@@ -49,7 +57,7 @@ def parse_args(args: List[str]) -> Arguments:
     )
 
     parsed = parser.parse_args(args)
-    config = load_config('./config.yaml')
+    config = load_config(parsed.config_file_path)
 
     if parsed.since is None:
         parsed.since = get_target_date().isoformat()
@@ -62,6 +70,8 @@ def parse_args(args: List[str]) -> Arguments:
             f'{parsed.since} 04:00:00').replace(tzinfo=local_tz)
 
     return Arguments(
+        config_file_path=parsed.config_file_path,
+
         since=parsed.since,
         board_id=config.board_id,
         completion_registry_thread_id=config.completion_registry_thread_id,

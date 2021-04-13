@@ -36,6 +36,8 @@ CHARACTER_COUNT_METHOD_EXPLANATION = "除换行与一般空白外字符的个数
 
 @dataclass(frozen=True)
 class Arugments:
+    config_file_path: str
+
     target_date: date
 
     check_sage: bool
@@ -88,6 +90,12 @@ def parse_args(args: List[str]) -> Arugments:
     )
 
     parser.add_argument(
+        '-c', '--config', type=str, default='./config.yaml',
+        dest='config_file_path',
+        help='配置文件路径',
+    )
+
+    parser.add_argument(
         type=date.fromisoformat, nargs='?',
         dest='target_date',
         help="要报告的日期",
@@ -98,12 +106,12 @@ def parse_args(args: List[str]) -> Arugments:
         help="是否在发布前检查所要发到的串有无被下沉",
     )
     parser.add_argument(
-        '--publish', type=bool, default=False,
+        '--publish', action='store_true',
         dest='publish',
         help="是否要把报告发布到趋势串中",
     )
     parser.add_argument(
-        '--notify-daily-qst', type=bool, default=False,
+        '--notify-daily-qst', action='store_true',
         dest='notify_daily_qst_thread',
         help="是否要通知跑团日报新发布的报告",
     )
@@ -126,7 +134,7 @@ def parse_args(args: List[str]) -> Arugments:
     )
 
     parsed = parser.parse_args(args)
-    config = load_config('./config.yaml')
+    config = load_config(parsed.config_file_path)
 
     if parsed.target_date is None:
         parsed.target_date = get_target_date()
@@ -187,6 +195,8 @@ def parse_args(args: List[str]) -> Arugments:
         notify_target = 'daily_qst_thread' if parsed.notify_daily_qst_thread else None
 
     return Arugments(
+        config_file_path=parsed.config_file_path,
+
         target_date=parsed.target_date,
 
         check_sage=parsed.check_sage,
@@ -243,7 +253,7 @@ def main():
 
         if args.publish_on_trend_thread:
             publication_record = PublicationRecord(conn=conn,
-                                                   date=args.target_date, type_='trend')
+                                                   subject_date=args.target_date, report_type='trend')
             attempts = publication_record.attempts
             if publication_record.is_done or attempts > 3:
                 return

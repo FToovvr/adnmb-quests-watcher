@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from typing import List
+from dataclasses import dataclass
 import traceback
 
 import logging
@@ -25,9 +26,33 @@ logging.config.fileConfig('logging.2.6_check_status_of_completed_threads.conf')
 # FIXME: 遇到被删的串不会记录被删，导致会一直检查下去
 
 
+@dataclass(frozen=True)
+class Arguments:
+    config_file_path: str
+
+
+def parse_args(args: List[str]) -> Arguments:
+    parser = argparse.ArgumentParser(
+        description='检查申请完结但尚未记录有添加蓝字的主串内容是否有变化。',
+    )
+
+    parser.add_argument(
+        '-c', '--config', type=str, default='./config.yaml',
+        dest='config_file_path',
+        help='配置文件路径',
+    )
+
+    parsed = parser.parse_args(args)
+
+    return Arguments(
+        config_file_path=parsed.config_file_path,
+    )
+
+
 def main():
 
-    config = load_config('./config.yaml')
+    args = parse_args(sys.argv[1:])
+    config = load_config(args.config_file_path)
 
     client = config.client.create_client()
 
@@ -67,9 +92,9 @@ def scan_finished_threads(db: DB, client: anobbsclient.Client, stats: Stats):
     for id in db.get_thread_ids_in_completion_registry_thread_without_blue_texts():
         [page, usage] = client.get_thread_page(id=id, page=1,
                                                for_analysis=True)
-        stats.total_bandwidth_usage.add(usage, int(page._raw['fid']),
-                                        run_at=datetime.now(tz=local_tz))
-        db.record_thread(thread=page)
+        stats.total_bandwidth_usage.add(usage)
+        db.record_thread(thread=page, board_id=int(page._raw['fid']),
+                         updated_at=datetime.now(tz=local_tz))
 
 
 if __name__ == '__main__':

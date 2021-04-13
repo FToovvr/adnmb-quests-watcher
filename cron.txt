@@ -1,2 +1,2 @@
 #  $THE_PATH 需要改成对应路径
-* * * * * exec flock -n /tmp/adnmb-qst-watcher.lock $THE_PATH/adnmb-qst-watcher/0_tick.py >/var/log/adnmb-qst-watcher.latest.log 2>&1
+* * * * * $THE_PATH/0_tick.py >/var/log/adnmb-qst-watcher.latest.log 2>&1
