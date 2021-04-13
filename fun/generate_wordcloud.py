@@ -1,25 +1,27 @@
 #!/usr/bin/env python3
 
-# 要在父文件夹运行
-
 import psycopg2
 from bs4 import BeautifulSoup
 import jieba
 import regex
 from wordcloud import WordCloud
+import hashlib
 
+import os
 import sys
-sys.path.append(".")  # noqa
+os.chdir(sys.path[0])  # noqa
+sys.path.append("..")  # noqa
 
 from commons.config import load_config
 
 
 def main():
-    config = load_config('./config.yaml')
+
+    config = load_config('../config.yaml')
 
     stop_words = set()
 
-    for f_path in ['fun/stopwords.txt', 'fun/stopwords_supplement.txt']:
+    for f_path in ['./stopwords.txt', './stopwords_supplement.txt']:
         with open(f_path) as f:
             _stop_words = f.read()
             _stop_words = _stop_words.splitlines()
@@ -29,7 +31,7 @@ def main():
     conn = psycopg2.connect(config.database.connection_string)
     cur: psycopg2._psycopg.cursor = conn.cursor()
 
-    range = ('2021-04-11 04:00+8', '2021-04-12 04:00+8')
+    range = ('2021-04-12 04:00+8', '2021-04-13 04:00+8')
 
     cur.execute(
         r'SELECT count(id) FROM post WHERE in_boundaries(created_at, %s::timestamptz, %s::timestamptz)', range)
@@ -49,15 +51,22 @@ def main():
         if i % 1000 == 0:
             print(f"{i+1}/{total}")
 
+    def md5_color_func(word: str = None, font_size=None, position=None,
+                       orientation=None, font_path=None, random_state=None):
+        md5 = hashlib.md5(word.encode('utf-8')).hexdigest()
+        x = int(md5[:6], base=16) / float(16**6 - 1) * 240
+        return f'hsl({x}, 80%, 50%)'
+
     wc = WordCloud(
         # 这文件夹终于有作用了…
-        font_path='./fun/fonts/NotoSerifSC/NotoSerifSC-SemiBold.otf',
-        width=1920, height=1200,
         background_color='white',
+        color_func=md5_color_func,
+        font_path='./fonts/NotoSerifSC/NotoSerifSC-SemiBold.otf',
+        width=1920, height=1200,
         scale=2,
     ).generate(' '.join(words))
 
-    wc.to_file('./report_out/wordcloud.png')
+    wc.to_file('../report_out/wordcloud.png')
 
 
 if __name__ == '__main__':

@@ -2,6 +2,7 @@ from typing import Optional, List
 from dataclasses import dataclass
 
 from pathlib import Path
+from os.path import join
 import re
 
 import yaml
@@ -65,7 +66,8 @@ class Config:
     publishing: PublishingConfig
 
 
-def load_config(path: Path) -> Config:
+def load_config(path: str) -> Config:
+    path = Path(path)
 
     with open(path, 'r') as config_file:
         obj = yaml.load(config_file.read(), Loader=yaml.SafeLoader)
@@ -73,7 +75,7 @@ def load_config(path: Path) -> Config:
         consts = obj['consts']
 
         database = obj['database']
-        with open(database['password-file'], 'r') as pw_file:
+        with open(join(path.parent, database['password-file']), 'r') as pw_file:
             database_password = pw_file.read().strip()
         database = DatabaseConfig(
             host=database['host'],
@@ -84,7 +86,7 @@ def load_config(path: Path) -> Config:
 
         client = obj['client']
         if client is not None:
-            with open(client['file'], 'r') as client_file:
+            with open(join(path.parent, client['file']), 'r') as client_file:
                 client_obj = yaml.load(
                     client_file.read(), Loader=yaml.SafeLoader)
                 client = ClientConfig(
