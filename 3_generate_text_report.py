@@ -79,6 +79,8 @@ class Including:
         elif self.method == 'not_below_q3':
             return "前 25%"
         elif self.method == 'count_at_least':
+            if self.arguments[0] % 19 == 0:
+                return f"新增回应≥{self.arguments[0]}（满{self.arguments[0]//19}页）"
             return f"新增回应≥{self.arguments[0]}"
         else:
             assert(False)

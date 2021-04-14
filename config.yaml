@@ -27,4 +27,4 @@ publishing:
 
   # 涵盖范围
   # 可以被命令行选项覆盖
-  including: [not_below_q2]
+  including: [count_at_least, "19"]
