@@ -5,6 +5,7 @@ from dateutil import tz
 local_tz = tz.gettz('Asia/Shanghai')
 
 ZWSP = '\u200b'
+WORD_JOINER = '\u2060'
 
 OMITTING = ZWSP + "…"
 

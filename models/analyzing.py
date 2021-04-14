@@ -14,7 +14,7 @@ import sys
 sys.path.append("..")  # noqa
 
 # pylint: disable=import-error
-from commons.consts import local_tz, ZWSP, OMITTING
+from commons.consts import local_tz, ZWSP, WORD_JOINER, OMITTING
 
 
 @dataclass(frozen=True)
@@ -43,28 +43,35 @@ class ThreadStats:
         return BeautifulSoup(self.raw_content, features='html.parser').get_text()
 
     @staticmethod
-    def insert_zwsps_between_chinese_characters(text: str) -> str:
+    def make_text_unsearchable(text: str) -> str:
+        """在文本中间插入空格，以防止报告内容污染搜索结果"""
+
         def insert_zwsps_fn(match_obj):
             return ZWSP.join(list(match_obj.group(0)))
-        return regex.sub(r'\p{han}+', insert_zwsps_fn, text)
+        text = regex.sub(r'\p{han}+', insert_zwsps_fn, text)
+
+        def insert_word_joiner_fn(match_obj):
+            return WORD_JOINER.join(list(match_obj.group(0)))
+        text = regex.sub(r'\p{latin}+', insert_word_joiner_fn, text)
+        return text
 
     def generate_summary(self, free_lines: int) -> str:
         # TODO: 其实插入 zwsp 放外部更合适？
         lines = []
-        if self.title is not None:
+        if self.title is not None and len(self.title) > 0:
             title = self.title.replace(ZWSP, '')
             if len(title) > 15:  # 以防万一
                 title = title[:14] + OMITTING
             free_lines -= 1
             lines += [
-                f"标题：{ThreadStats.insert_zwsps_between_chinese_characters(title)}"]
-        if self.name is not None:
+                f"标题：{ThreadStats.make_text_unsearchable(title)}"]
+        if self.name is not None and len(self.name) > 0:
             name = self.name.replace(ZWSP, '')
             if len(name) > 15:  # 以防万一
                 name = name[:14] + OMITTING
             free_lines -= 1
             lines += [
-                f"名称：{ThreadStats.insert_zwsps_between_chinese_characters(name)}"]
+                f"名称：{ThreadStats.make_text_unsearchable(name)}"]
         for content_line in self.content.split('\n'):
             if free_lines == 0:
                 lines += [OMITTING]
@@ -78,7 +85,7 @@ class ThreadStats:
                 line_to_add += line_part.replace(ZWSP, '')
                 free_lines -= 1
             lines += [
-                ThreadStats.insert_zwsps_between_chinese_characters(line_to_add)]
+                ThreadStats.make_text_unsearchable(line_to_add)]
         while True:
             if lines[-1].strip() == "":
                 lines.pop()
