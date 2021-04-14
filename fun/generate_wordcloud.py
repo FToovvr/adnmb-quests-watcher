@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+from datetime import datetime, date, timedelta
 import psycopg2
 from bs4 import BeautifulSoup
 import jieba
@@ -12,10 +13,16 @@ import sys
 os.chdir(sys.path[0])  # noqa
 sys.path.append("..")  # noqa
 
+from commons.consts import get_target_date, local_tz
 from commons.config import load_config
 
 
 def main():
+
+    if len(sys.argv) > 1:
+        subject_date = date.fromisoformat(sys.argv[1])
+    else:
+        subject_date = get_target_date(datetime.now(tz=local_tz))
 
     config = load_config('../config.yaml')
 
@@ -31,7 +38,8 @@ def main():
     conn = psycopg2.connect(config.database.connection_string)
     cur: psycopg2._psycopg.cursor = conn.cursor()
 
-    range = ('2021-04-12 04:00+8', '2021-04-13 04:00+8')
+    range = (f'{subject_date.isoformat()} 04:00+8',
+             f'{(subject_date + timedelta(days=1)).isoformat()} 04:00+8')
 
     cur.execute(
         r'SELECT count(id) FROM post WHERE in_boundaries(created_at, %s::timestamptz, %s::timestamptz)', range)
