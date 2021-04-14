@@ -7,6 +7,7 @@ import jieba
 import regex
 from wordcloud import WordCloud
 import hashlib
+from random import Random
 
 import os
 import sys
@@ -65,8 +66,10 @@ def main():
         x = int(md5[:6], base=16) / float(16**6 - 1) * 240
         return f'hsl({x}, 80%, 50%)'
 
+    random_state = Random()
+    random_state.seed(subject_date.isoformat())
     wc = WordCloud(
-        # 这文件夹终于有作用了…
+        random_state=random_state,
         background_color='white',
         color_func=md5_color_func,
         font_path='./fonts/NotoSerifSC/NotoSerifSC-SemiBold.otf',
@@ -74,6 +77,7 @@ def main():
         scale=2,
     ).generate(' '.join(words))
 
+    # 这文件夹终于有作用了…
     wc.to_file('../report_out/wordcloud.png')
 
 
