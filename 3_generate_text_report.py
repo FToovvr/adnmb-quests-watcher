@@ -14,6 +14,7 @@ import logging.config
 import traceback
 import re
 from time import sleep
+from io import BytesIO
 
 import requests
 from bs4 import BeautifulSoup
@@ -27,7 +28,7 @@ from commons.config import load_config, ClientConfig
 from models.analyzing import ThreadStats, Counts, Stats, DB
 from models.publication_record import PublicationRecord
 from commons.debugging import super_huge_thread_pg
-
+from fun.generate_wordcloud import generate_wordcloud
 
 FORMAT_VERSION = '3.0'
 CHARACTER_COUNT_METHOD_VERSION = '2'
@@ -50,6 +51,7 @@ class Arugments:
         Literal['daily_qst_thread'],
         Literal['trend_thread'],
     ]
+    notify_with_wordcloud: bool
 
     page_capacity: int
     including: including
@@ -116,6 +118,11 @@ def parse_args(args: List[str]) -> Arugments:
         '--notify-daily-qst', action='store_true',
         dest='notify_daily_qst_thread',
         help="是否要通知跑团日报新发布的报告",
+    )
+    parser.add_argument(
+        '--notify-with-wordcloud', action='store_true',
+        dest='notify_with_wordcloud',
+        help="是否在新报告发布通知中附带词云"
     )
     parser.add_argument(
         '--including', type=str, nargs='+', default=None,
@@ -207,6 +214,7 @@ def parse_args(args: List[str]) -> Arugments:
         publish_on_trend_thread=parsed.publish,
         daily_qst_thread_id=config.daily_qst_thread_id,
         notify_target=notify_target,
+        notify_with_wordcloud=parsed.notify_with_wordcloud,
 
         page_capacity=config.publishing.page_capacity,
         including=parsed.including,
@@ -301,8 +309,10 @@ def main():
             else:
                 assert(args.notify_target == 'trend_thread')
                 notify_thread_id = args.trend_thread_id
-            notify(notify_thread_id, args.target_date,
-                   client, publication_record)
+            notify(conn,
+                   notify_thread_id, args.target_date,
+                   client, publication_record,
+                   args.notify_with_wordcloud)
 
     logging.info("成功结束")
 
@@ -385,9 +395,11 @@ def publish(pages: Tuple[str, str, str], destination_thread_id: int, uuid: str,
         )
 
 
-def notify(notify_thread_id: int, subject_date: date,
+def notify(conn: psycopg2._psycopg.connection,
+           notify_thread_id: int, subject_date: date,
            client: anobbsclient.Client,
-           publication_record: PublicationRecord):
+           publication_record: PublicationRecord,
+           with_wordcloud: bool):
     # TODO: 检查成功与否
 
     logging.info(f"将发送报告出炉通知。由于发串间隔限制，将等待30秒")
@@ -407,11 +419,20 @@ def notify(notify_thread_id: int, subject_date: date,
         content += f"(位于原串第{min_reply_pn}〜{max_reply_pn}页)"
     content += '\n'
 
+    img_data = None
+    if with_wordcloud:
+        img = generate_wordcloud(conn=conn, subject_date=subject_date)
+        with BytesIO() as img_data_buf:
+            img.save(img_data_buf, format='PNG')
+            img_data = img_data_buf.getvalue()
+
     client.reply_thread(
         to_thread_id=notify_thread_id,
         title="本期跑团版趋势报告出炉",
         name=subject_date.strftime("%Y年%-m月%-d日 号"),
         content=content,
+        attachment=None if not with_wordcloud else anobbsclient.Attachment(
+            name=f'词云_{subject_date.isoformat()}.png', file=img_data)
     )
 
 
