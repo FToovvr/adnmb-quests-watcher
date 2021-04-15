@@ -262,6 +262,9 @@ def adjust_dc(dc, stop_words: Optional[set] = None):
                                   * (outliers_count/dc['next'][x]['$total']))
                 if dc_count[x] == 0:
                     dc_count.pop(x)
+                elif int(dc_count[x]) == 0:
+                    # workaround
+                    dc_count[x] = 1
 
     dc['count'] = dc_count
 
