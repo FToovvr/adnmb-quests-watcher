@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from typing import Optional, Dict, List, Set, Callable
+from dataclasses import dataclass
 from collections import defaultdict, Counter
 from operator import add
 
@@ -15,8 +16,8 @@ import math
 
 import psycopg2
 from bs4 import BeautifulSoup
-# import jieba
-import pkuseg
+import jieba
+# import pkuseg
 import regex
 from wordcloud import WordCloud
 
@@ -28,7 +29,8 @@ from commons.consts import get_target_date, local_tz
 from commons.config import load_config
 
 
-seg = pkuseg.pkuseg()
+# seg = pkuseg.pkuseg()
+
 
 def main():
 
@@ -56,14 +58,14 @@ def main():
 
 def load_default_stop_words():
     files = list(filter(lambda f: os.path.join(sys.path[0], f), [
-                            './stopwords.txt',
-                            # './stopwords_supplement.txt',
-                            ]))
+        './stopwords.txt',
+        # './stopwords_supplement.txt',
+    ]))
     return load_stop_words_from_files(files)
 
 
 def load_stop_words_from_files(stop_words_files: List[str]):
-    stop_words = set()
+    stop_words = set([' '])
     for f_path in stop_words_files:
         with open(f_path) as f:
             _stop_words = f.read()
@@ -78,28 +80,30 @@ def generate_wordcloud(conn: psycopg2._psycopg.connection,
                        loading_progress_callback: Optional[Callable[[int, int], None]] = None):
 
     dc = update_dc(conn, subject_date)
+    stop_words = load_default_stop_words()
+    adjust_dc(dc, stop_words)
+    data_count = dc['count']
 
     words = []
     total = total_contents(conn, subject_date)
     for i, [_, content] in enumerate(each_content_on(conn, subject_date)):
-        words += segment_content(content)
+        words += filter(lambda word: word in data_count,
+                        segment_content(content))
         if loading_progress_callback:
             loading_progress_callback(total, i)
 
-    data_count = dc['count']
     words = Counter(words)
     total_words_today = sum(words.values())
     max_tf_today = words.most_common(1)[0][1] / total_words_today
-
-    stop_words = load_default_stop_words()
 
     def calculate_tf_idf(word, count):
         def tf(count):
             return count / total_words_today
         if word in stop_words or word in ['No']:
             return 0
-        tf_idf = (0.1 + 0.9*(tf(count) / max_tf_today)) * \
-            math.log10(dc['n']/(data_count[word]+1))
+        # print(word, count, tf(count), max_tf_today, dc['n'], data_count[word])
+        tf_idf = (0.5 + 0.5*(tf(count) / max_tf_today)) * \
+            math.log10(dc['n']/(data_count[word]))
         return tf_idf
     tf_idfs = {word: calculate_tf_idf(word, count)
                for word, count in words.items()}
@@ -129,18 +133,31 @@ def generate_wordcloud(conn: psycopg2._psycopg.connection,
     return wc.to_image()
 
 
-class NextDict(dict):
+@dataclass
+class NextDict():
+
+    _dict: Dict[str, Dict[str, int]]
 
     def __init__(self, orignal_next_dict: Dict[str, Dict[str, int]], *nargs, **kwargs):
-        super(NextDict, self).__init__(*nargs, **kwargs)
-        self.orignal_next_dict = orignal_next_dict
+        self._dict = orignal_next_dict
 
-    def __missing__(self, key):
-        if key in self.orignal_next_dict:
-            self[key] = defaultdict(int, **self.orignal_next_dict[key])
+    def __getitem__(self, key):
+        s = super(NextDict, self)
+        if key in self._dict:
+            if not isinstance(self._dict[key], defaultdict):
+                self._dict[key] = defaultdict(int, **self._dict[key])
         else:
-            self[key] = defaultdict(int)
-        return self[key]
+            self._dict[key] = defaultdict(int)
+        return self._dict[key]
+
+    def __setitem__(self, key, value):
+        self._dict[key] = value
+
+    def items(self):
+        return self._dict.items()
+
+    def get_dict(self):
+        return self._dict
 
 
 def update_dc(conn: psycopg2._psycopg.connection, subject_date: date):
@@ -174,8 +191,7 @@ def update_dc(conn: psycopg2._psycopg.connection, subject_date: date):
             start_date = date.fromisoformat(
                 dc['last_updated_date']) + timedelta(days=1)
             dc['count'] = defaultdict(int, **dc['count'])
-            _next_items = dc['next']
-            dc['next'] = NextDict(_next_items)
+            dc['next'] = NextDict(dc['next'])
 
     print(f"dc start date: {start_date.isoformat()}")
 
@@ -185,44 +201,88 @@ def update_dc(conn: psycopg2._psycopg.connection, subject_date: date):
         for current_date in [start_date + timedelta(days=x) for x in range(0, (subject_date-start_date).days + 1)]:
             updated = True
             total = total_contents(conn, current_date)
-            dc['n'] += total
-            seen_words_per_thread = defaultdict(set)
+            # dc['n'] += total
+            dc['n'] += 1
+            # seen_words_per_thread = defaultdict(set)
+            seen_words_today = set()
             for i, [thread_id, content] in enumerate(each_content_on(conn, current_date)):
                 if i % 1000 == 0:
                     print(f'dc {current_date.isoformat()} {i+1}/{total}')
                 words = segment_content(content)
                 for i, word in enumerate(words):
-                    seen_words_per_thread[thread_id].add(word)
-                    if i < len(words) - 1:
+                    if word == ' ':
+                        continue
+                    # seen_words_per_thread[thread_id].add(word)
+                    seen_words_today.add(word)
+                    if i < len(words) - 1 and words[i+1] != ' ':
                         dc['next'][word][words[i+1]] += 1
-            counts = Counter(
-                reduce(add, map(lambda x: list(x), seen_words_per_thread.values())))
+                    dc['next'][word]['$total'] += 1
+            # counts = Counter(
+            #     reduce(add, map(lambda x: list(x), seen_words_per_thread.values())))
+            counts = Counter(list(seen_words_today))
             dc['count'] = Counter(dc['count']) + counts
 
         dc['last_updated_date'] = subject_date.isoformat()
 
     if updated:
+        def i_f___ing_hate_python(obj):
+            if isinstance(obj, NextDict):
+                return obj.get_dict()
+            return obj.__dict__
         with open(dc_file_path, 'w+') as f:
-            json.dump(dc, f, sort_keys=True, indent=4, ensure_ascii=False)
+            json.dump(dc, f, sort_keys=True, indent=4,
+                      ensure_ascii=False, default=i_f___ing_hate_python)
 
     dc['count'] = Counter(**dc['count'])
 
     return dc
 
 
-def find_outlier(x: Dict[str, int]):
-    l = list(x)
-    values = map(lambda item: item[1], l)
-    # mean = mean(values)
-    # stdev = stdev(values)
-    quartiles = quantiles(values)
-    iqr = quartiles[2] - quartiles[0]
+def adjust_dc(dc, stop_words: Optional[set] = None):
+    if stop_words is None:
+        stop_words = load_default_stop_words()
+
+    dc_count = dc['count']
+    for stop_word in stop_words:
+        dc_count.pop(stop_word, None)
+    dc_count_orig = dict(**dc_count)
+
+    for word, next in dc['next'].items():
+        if word in stop_words:
+            continue
+        outliers = find_outliers(next)
+        outliers = list(filter(lambda x: x[0] not in stop_words, outliers))
+        # if len(outliers) > 0:
+        #     print(word, outliers)
+        for [outlier_word, outliers_count] in outliers:
+            dc_count[word+outlier_word] += dc_count_orig[word] * \
+                (outliers_count/next['$total'])
+            for x in [word, outlier_word]:
+                dc_count[x] = max(0, dc_count[x] - dc_count_orig[x]
+                                  * (outliers_count/dc['next'][x]['$total']))
+                if dc_count[x] == 0:
+                    dc_count.pop(x)
+
+    dc['count'] = dc_count
+
+
+def find_outliers(x: Dict[str, int]):
+    l = list(filter(lambda item: not item[0].startswith('$'), x.items()))
+    if len(l) < 3:
+        return []
+    values = list(map(lambda item: item[1], l))
+    m = mean(values)
+    # if m < 10:
+    #     return []
+    s = stdev(values)
+    # quartiles = quantiles(values)
+    # iqr = quartiles[2] - quartiles[0]
 
     # https://stackoverflow.com/a/2303583
-    # outliers = filter(lambda item: abs(item[1]-mean) > 3 * stdev, x)
-    outliers = filter(lambda item: item[0] > quartiles[2] + iqr * 1.5)
+    outliers = filter(lambda item: abs(item[1]-m) > 3*2 * s, l)
+    # outliers = filter(lambda item: item[1] > quartiles[2] + iqr * 3, l)
 
-    return list(map(lambda item: item[0], outliers))
+    return list(outliers)  # list(map(lambda item: item[0], outliers))
 
 
 def segment_content(content: str):
@@ -232,8 +292,8 @@ def segment_content(content: str):
     if len(text.strip()) == 0:
         return []
     # words += filter(lambda w: w not in stop_words, jieba.lcut(text))
-    # return jieba.lcut(text)
-    return seg.cut(text)
+    return jieba.lcut(text)
+    # return seg.cut(text)
 
 
 def total_contents(conn: psycopg2._psycopg.connection, subject_date: date):
