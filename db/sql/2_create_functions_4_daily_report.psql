@@ -87,7 +87,7 @@ CREATE FUNCTION get_daily_threads_report(
     ) AS current_thread ON current_thread.id = new_post.parent_thread_id -- 这里的 "current" 其实指的是"当时"
     -- TODO: 有办法把 current_thread.id 之外的去掉吗？
     GROUP BY current_thread.id, parent_board_id, current_thread.created_at, current_thread.user_id, current_thread.title, current_thread.name, current_thread.content, current_thread.updated_at, current_thread.is_disappeared, current_thread.current_reply_count
-    ORDER BY increased_response_count DESC;
+    ORDER BY increased_response_count DESC, current_thread.id ASC;
 
     $$ LANGUAGE sql;
 
