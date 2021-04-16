@@ -35,14 +35,10 @@ CREATE INDEX idx___post___user_id
     ON post(user_id);
 CREATE UNIQUE INDEX idx___post___created_at__id
     ON post(created_at, id);
-CREATE UNIQUE INDEX idx___post___parent_board_id__id
-    ON post(parent_board_id, id);
-CREATE UNIQUE INDEX idx___post___parent_board_id__created_at__id
-    ON post(parent_board_id, created_at, id);
-CREATE UNIQUE INDEX idx___post___parent_thread_id__id
-    ON post(parent_thread_id, id);
-CREATE UNIQUE INDEX idx___post___parent_thread_id__created_at__id
-    ON post(parent_thread_id, created_at, id);
+CREATE INDEX idx___post___parent_board_id
+    ON post(parent_board_id);
+CREATE INDEX idx___post___parent_thread_id
+    ON post(parent_thread_id);
 
 CREATE TABLE thread_extra (
     id          integer,
@@ -55,6 +51,8 @@ CREATE TABLE thread_extra (
 
     is_disappeared      boolean DEFAULT FALSE,
 
+    -- 一次为真后即使之后不再有蓝字也会为真
+    -- 这是 feature
     has_blue_texts                      boolean,
     completion_registry_response_ids    integer[],
 
@@ -69,9 +67,26 @@ CREATE VIEW thread AS
     LEFT JOIN thread_extra ON thread_extra.id = post.id
     WHERE parent_board_id IS NOT NULL;
 
+CREATE UNIQUE INDEX idx___thread___id
+    ON post(id)
+    WHERE parent_board_id IS NOT NULL;
+CREATE UNIQUE INDEX idx___thread___created_at__id
+    ON post(created_at, id)
+    WHERE parent_board_id IS NOT NULL;
+CREATE INDEX idx___thread___effective_at_least_from
+    ON post(effective_at_least_from)
+    WHERE parent_board_id IS NOT NULL;
+
 CREATE VIEW response AS
     SELECT post.id, effective_at_least_from, parent_thread_id, created_at, user_id, content, attachment_base, attachment_extension, name, email, title, misc_fields
     FROM post
+    WHERE parent_thread_id IS NOT NULL;
+
+CREATE UNIQUE INDEX idx___response___id
+    ON post(id)
+    WHERE parent_thread_id IS NOT NULL;
+CREATE UNIQUE INDEX idx___response___created_at__id
+    ON post(created_at, id)
     WHERE parent_thread_id IS NOT NULL;
 
 CREATE TABLE thread_old_revision (
