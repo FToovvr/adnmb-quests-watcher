@@ -27,4 +27,7 @@ publishing:
 
   # 涵盖范围
   # 可以被命令行选项覆盖
-  including: [count_at_least, "19"]
+  including:
+    any:
+      - field: ["increased_response_count", ">=", 19]
+      - field: ["increased_character_count", ">=", 500]

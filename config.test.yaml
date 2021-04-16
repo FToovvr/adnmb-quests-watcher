@@ -26,4 +26,5 @@ publishing:
 
   # 涵盖范围
   # 可以被命令行选项覆盖
-  including: [top, 2]
+  including:
+    ranking: ["<=", 3]

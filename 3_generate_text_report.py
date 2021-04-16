@@ -16,6 +16,7 @@ import re
 from time import sleep
 from io import BytesIO
 
+import yaml
 import requests
 from bs4 import BeautifulSoup
 import psycopg2
@@ -25,7 +26,9 @@ from anobbsclient.walk import create_walker, ReversalThreadWalkTarget
 
 from commons.consts import local_tz, ZWSP, OMITTING, get_target_date
 from commons.config import load_config, ClientConfig
-from models.analyzing import ThreadStats, Counts, Stats, DB
+from commons.thread_stats import ThreadStats, Counts
+from commons.include_filters import IncludeRule, include_rule_builder, IncludeRuleRanking
+from models.analyzing import Stats, DB
 from models.publication_record import PublicationRecord
 from commons.debugging import super_huge_thread_pg
 from fun.generate_wordcloud import generate_wordcloud
@@ -54,7 +57,7 @@ class Arugments:
     notify_with_wordcloud: bool
 
     page_capacity: int
-    including: including
+    include_rule: IncludeRule
     no_compare: bool
 
     connection_string: str
@@ -66,26 +69,6 @@ class Arugments:
     @property
     def requires_client(self) -> bool:
         return self.publish_on_trend_thread or self.check_sage
-
-
-@dataclass(frozen=True)
-class Including:
-    method: str
-    arguments: List[Any]
-
-    def __str__(self) -> str:
-        if self.method == 'top':
-            return f"前 {self.arguments[0]} 位"
-        elif self.method == 'not_below_q2':
-            return "前 50%"
-        elif self.method == 'not_below_q3':
-            return "前 25%"
-        elif self.method == 'count_at_least':
-            if self.arguments[0] % 19 == 0:
-                return f"新增回应≥{self.arguments[0]}（满{self.arguments[0]//19}页）"
-            return f"新增回应≥{self.arguments[0]}"
-        else:
-            assert(False)
 
 
 def parse_args(args: List[str]) -> Arugments:
@@ -125,9 +108,9 @@ def parse_args(args: List[str]) -> Arugments:
         help="是否在新报告发布通知中附带词云"
     )
     parser.add_argument(
-        '--including', type=str, nargs='+', default=None,
+        '--including', type=str, default=None,
         dest='including',
-        help="主题串包含进报告的条件",
+        help="主题串包含进报告的条件，YAML 格式",
     )
     parser.add_argument(
         '--no-compare', action='store_true',
@@ -150,25 +133,9 @@ def parse_args(args: List[str]) -> Arugments:
 
     if parsed.including == None:
         parsed.including = config.publishing.including
-
-    if parsed.including[0] in ['not_below_q2', 'not_below_q3']:
-        assert(len(parsed.including) == 1)
-        parsed.including = Including(parsed.including[0], [])
-    elif parsed.including[0] == 'top':
-        assert(len(parsed.including) <= 2)
-        if len(parsed.including) == 1:
-            parsed.including = Including('top', [32])
-        else:
-            parsed.including = Including('top', [int(parsed.including[1])])
-    elif parsed.including[0] == 'count_at_least':
-        assert(len(parsed.including) <= 2)
-        if len(parsed.including) == 1:
-            parsed.including = Including('count_at_least', [20])
-        else:
-            parsed.including = Including(
-                'count_at_least', [int(parsed.including[1])])
     else:
-        assert(False)
+        parsed.including = yaml.parse(parsed.including, Loader=yaml.SafeLoader)
+    parsed.including = include_rule_builder.build(parsed.including)
 
     force_slience = False
     notify_trend_thread_instead = False
@@ -196,7 +163,7 @@ def parse_args(args: List[str]) -> Arugments:
     else:
         assert(s == 'none')
     if s.endswith('-'):
-        parsed.including = Including('top', [1])
+        parsed.including = IncludeRuleRanking('<=', 1)
 
     if notify_trend_thread_instead:
         notify_target = 'trend_thread'
@@ -217,7 +184,7 @@ def parse_args(args: List[str]) -> Arugments:
         notify_with_wordcloud=parsed.notify_with_wordcloud,
 
         page_capacity=config.publishing.page_capacity,
-        including=parsed.including,
+        include_rule=parsed.including,
         no_compare=parsed.no_compare,
 
         connection_string=config.database.connection_string,
@@ -226,24 +193,6 @@ def parse_args(args: List[str]) -> Arugments:
 
         client_config=config.client,
     )
-
-# 收录条件
-
-
-def RANK_INCLUDING(thread: ThreadStats, including: Including,
-                   threads: List[ThreadStats], counts: Counts,):
-    if including.method == 'top':
-        nth_thread = threads[including.arguments[0] - 1] \
-            if len(threads) >= including.arguments[0] else threads[-1]
-        return thread.increased_response_count >= nth_thread.increased_response_count
-    elif including.method == 'not_below_q2':
-        return thread.increased_response_count >= counts.thread_new_post_quartiles[1]
-    elif including.method == 'not_below_q3':
-        return thread.increased_response_count >= counts.thread_new_post_quartiles[2]
-    elif including.method == 'count_at_least':
-        return thread.increased_response_count >= including.arguments[0]
-    else:
-        assert(False)
 
 
 MAIN_DIVIDER_PART = f"══{ZWSP}══{ZWSP}══"
@@ -288,7 +237,7 @@ def main():
             conn=conn,
             daily_qst_thread_id=args.daily_qst_thread_id,
             date=args.target_date, uuid=uuid,
-            rank_inclusion_method=args.including,
+            rank_include_rule=args.include_rule,
             rank_page_capacity=args.page_capacity,
             should_compare_with_last_day=not args.no_compare,
         )
@@ -496,7 +445,7 @@ def retrieve_data_then_generate_trend_report_text(
     conn: psycopg2._psycopg.connection,
     daily_qst_thread_id: int,
     date: datetime, uuid: str,
-    rank_inclusion_method: Including,
+    rank_include_rule: IncludeRule,
     rank_page_capacity: int,
     should_compare_with_last_day: bool,
 ) -> Tuple[str, str, str]:
@@ -506,7 +455,7 @@ def retrieve_data_then_generate_trend_report_text(
             db=db,
             daily_qst_thread_id=daily_qst_thread_id,
             date=date,
-            rank_inclusion_method=rank_inclusion_method,
+            rank_include_rule=rank_include_rule,
             rank_page_capacity=rank_page_capacity,
             uuid=uuid,
             should_compare_with_last_day=should_compare_with_last_day,
@@ -521,7 +470,7 @@ class TrendReportTextGenerator:
     daily_qst_thread_id: int
 
     date: datetime
-    rank_inclusion_method: Including
+    rank_include_rule: IncludeRule
     rank_page_capacity: int
     uuid: str
     should_compare_with_last_day: bool
@@ -566,7 +515,7 @@ class TrendReportTextGenerator:
             if daily_qst_reference is not None:
                 content += daily_qst_reference + '\n'
             content += self._generate_summary() + '\n'
-            content += "收录范围：" + str(self.rank_inclusion_method)
+            content += "收录范围：" + str(self.rank_include_rule)
             content += '\n\n'
 
             content += '\n'.join([self._format_heading("　说明　"), '', ''])
@@ -657,11 +606,9 @@ class TrendReportTextGenerator:
         included_threads = []
         threads_with_new_blue_text = []
         for (i, thread) in enumerate(self.threads):
-            rank = i+1
-            if False:  # thread.are_blue_texts_new:
-                threads_with_new_blue_text.append([rank, thread])
-            elif RANK_INCLUDING(thread, self.rank_inclusion_method, self.threads, self.counts):
-                included_threads.append([rank, thread])
+            ranking = i+1
+            if self.rank_include_rule.check(thread, ranking, self.counts, self.threads):
+                included_threads.append([ranking, thread])
         threads_with_new_blue_text = sorted(threads_with_new_blue_text,
                                             key=lambda x: x[1].created_at)
         included_threads = threads_with_new_blue_text + included_threads
@@ -675,14 +622,14 @@ class TrendReportTextGenerator:
 
     def _generate_trending_board(self, threads: List[Tuple[int, ThreadStats]], i_start: int) -> str:
         lines = []
-        for [rank, thread] in threads:
-            lines += [self.__generate_thread_entry(thread, rank)]
+        for [ranking, thread] in threads:
+            lines += [self.__generate_thread_entry(thread, ranking)]
 
         return '\n'.join(lines)
 
-    def __generate_thread_entry(self, thread: ThreadStats, rank: int) -> str:
+    def __generate_thread_entry(self, thread: ThreadStats, ranking: int) -> str:
         # thread = super_huge_thread_pg  # DEBUGGING
-        head = f"#{rank}"
+        head = f"#{ranking}"
         padding = len(head) + 1
         if thread.is_new:
             head += f" [+{thread.increased_response_count}/{thread.increased_response_count_by_po} 回应 NEW!]"
@@ -708,7 +655,7 @@ class TrendReportTextGenerator:
         if approx_distinct_cookie_count != 0:
             subhead_1 += [f"(参与饼干≥{approx_distinct_cookie_count})"]
         else:
-            subhead_1 += [f"(参与饼干>0)"]
+            subhead_1 += [f"(参与饼干≥1)"]
         character_count = "(+" + \
             f"{thread.increased_character_count/1000:.2f}K" + "/"
         if thread.increased_character_count_by_po != 0:
