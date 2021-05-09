@@ -119,7 +119,9 @@ CREATE PROCEDURE record_post(
                         name, email, title, misc_fields,
                         is_not_complete
                     ) SELECT 
-                        thread.id, thread.effective_at_least_from,
+                        thread.id,
+                        -- workaround
+                        COALESCE(thread.effective_at_least_from, '0001-01-01 00:00:00+0'::timestamptz),
                         thread.parent_board_id, thread.created_at, thread.user_id, thread.content,
                         thread.attachment_base, thread.attachment_extension,
                         thread.name, thread.email, thread.title, thread.misc_fields,
