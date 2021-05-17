@@ -79,6 +79,27 @@ class DB:
 
         return threads
 
+    def get_responses_match(self, date: datetime, in_thread_id: int, content_pattern: str) -> List[Tuple[int, str, int]]:
+        """
+        获取该日某串中匹配所给正则表达式的那些回应。
+
+        Returns
+        -------
+        [0] : int
+            匹配回应的串号。
+        [1] : str
+            匹配回应的内容。
+        [2] : int
+            匹配回应的偏移。
+
+            如果在匹配回应发布后到本次统计期间，有在此之后的回应被删，可能会前移。
+        """
+        lower_bound, upper_bound = self._get_boundaries(date)
+
+        self.cur.execute(r'''SELECT * FROM get_responses_match(%s, %s, %s, %s)''',
+                         (in_thread_id, content_pattern, lower_bound, upper_bound))
+        return self.cur.fetchall()
+
     def get_daily_qst(self, date: datetime, daily_qst_thread_id: int) -> Optional[Tuple[int, int]]:
         """
         获取该日的跑团日报。

@@ -91,6 +91,36 @@ CREATE FUNCTION get_daily_threads_report(
 
     $$ LANGUAGE sql;
 
+CREATE FUNCTION get_responses_match(
+    in _in_thread_id        integer,
+    in _content_matches_rx  text,
+
+    in _lower_bound         timestamptz,
+    in _upper_bound         timestamptz
+) RETURNS TABLE (
+    post_id integer,
+    content text,
+    "offset"  integer
+) AS $$
+    WITH response_in_thread AS (
+        SELECT id, content, created_at FROM response
+        WHERE parent_thread_id = _in_thread_id
+            AND in_boundaries(created_at, _lower_bound, _upper_bound)
+            AND regexp_match(content, _content_matches_rx, 'm') IS NOT NULL
+    )
+    SELECT
+        response_in_thread.id,
+        content,
+        current_reply_count - (
+        SELECT COUNT(id) FROM response
+        WHERE parent_thread_id = _in_thread_id
+        AND created_at > response_in_thread.created_at
+    )
+    FROM response_in_thread
+    LEFT JOIN thread_extra ON thread_extra.id = _in_thread_id
+    ORDER BY created_at;
+    $$ LANGUAGE sql;
+
 CREATE FUNCTION get_daily_qst_id_and_position(
     in _daily_qst_thread_id integer,
 
