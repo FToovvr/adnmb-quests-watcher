@@ -574,7 +574,7 @@ class TrendReportTextGenerator:
 
         # 由于有「11.5期」这样的实例，要考虑一天发多期的情况
         daily_dovess = self.db.get_responses_match(self.date, 36939614,
-                                                   r'^Daily Dove 每日鸽报\s*<br />$')
+                                                   r'^Daily Dove 每日鸽报.*<br />$')
         daily_dove_dict = OrderedDict()
         for daily_dove in daily_dovess:
             lines = daily_dove[1].splitlines()
