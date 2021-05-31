@@ -557,7 +557,7 @@ class TrendReportTextGenerator:
         stuff = []
 
         daily_qsts = self.db.get_responses_match(self.date, self.daily_qst_thread_id,
-                                                 r'^\[头条\]\s*<br />$')
+                                                 r'^\[头条\]\s*<br />\r?$')
         if len(daily_qsts) > 0:
             daily_qst = daily_qsts[-1]
             line1 = daily_qst[1].splitlines()[0]
@@ -574,7 +574,7 @@ class TrendReportTextGenerator:
 
         # 由于有「11.5期」这样的实例，要考虑一天发多期的情况
         daily_dovess = self.db.get_responses_match(self.date, 36939614,
-                                                   r'^Daily Dove 每日鸽报.*<br />$')
+                                                   r'^Daily Dove 每日鸽报.*<br />\r?$')
         daily_dove_dict = OrderedDict()
         for daily_dove in daily_dovess:
             lines = daily_dove[1].splitlines()
