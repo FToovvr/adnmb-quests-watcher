@@ -80,6 +80,9 @@ class ThreadStats:
             lines += [
                 ThreadStats.make_text_unsearchable(line_to_add)]
         while True:
+            if len(lines) == 0:
+                break
+
             if lines[-1].strip() == "":
                 lines.pop()
             else:
