@@ -550,50 +550,81 @@ class TrendReportTextGenerator:
         ])
 
     def _generate_daily_qst_reference(self) -> Optional[str]:
-        # TODO
-        if self.daily_qst_thread_id is None:
-            return None
-
         stuff = []
 
-        daily_qsts = self.db.get_responses_match(self.date, self.daily_qst_thread_id,
-                                                 r'^\[头条\]\s*<br />\r?$')
-        if len(daily_qsts) > 0:
-            daily_qst = daily_qsts[-1]
-            line1 = daily_qst[1].splitlines()[0]
-            m = re.search(r'(day .+?)\s*<br />', line1)
-            if m is None:
-                issue_text = ''
-            else:
-                issue = m.group(1)
-                if len(issue) > 10:
-                    issue = issue[:10] + "…"
-                issue_text = f"〔{issue}〕"
-            stuff.append(
-                f"跑团日报{issue_text}：>>No.{daily_qst[0]} (位于原串第{(daily_qst[2]-1)//19+1}页)")
+        # 跑团日报
+        if self.daily_qst_thread_id is not None:
+            daily_qsts = self.db.get_responses_match(
+                self.date, self.daily_qst_thread_id, r'^\[头条\]\s*?<br />\r?$')
+            if len(daily_qsts) > 0:
+                daily_qst = daily_qsts[-1]
+                line1 = daily_qst[1].splitlines()[0]
+                m = re.search(r'(day .+?)\s*?<br />', line1)
+                if m is None:
+                    issue_text = ''
+                else:
+                    issue = m.group(1)
+                    if len(issue) > 10:
+                        issue = issue[:10] + "…"
+                    issue_text = f"〔{issue}〕"
+                stuff.append(
+                    f"跑团日报{issue_text}：>>No.{daily_qst[0]} (位于原串第{(daily_qst[2]-1)//19+1}页)")
 
-        # 由于有「11.5期」这样的实例，要考虑一天发多期的情况
-        daily_dovess = self.db.get_responses_match(self.date, 36939614,
-                                                   r'^Daily Dove 每日鸽报.*<br />\r?$')
-        daily_dove_dict = OrderedDict()
-        for daily_dove in daily_dovess:
-            lines = daily_dove[1].splitlines()
-            if len(lines) < 2:
-                continue
-            line2 = lines[1]
-            m = re.search(r'第(\S*)期\s*<br />$', line2)
-            if m is None:
-                issue = None
-            else:
-                issue = m.group(1)
-            daily_dove_dict[issue] = daily_dove
-        for issue, daily_dove in daily_dove_dict.items():
-            if issue is None:
-                issue_text = ''
-            else:
-                issue_text = f"〔第{issue}期〕"
-            stuff.append(
-                f"每日鸽报{issue_text}：>>No.{daily_dove[0]} (位于原串第{(daily_dove[2]-1)//19+1}页)")
+        # 每日鸽报
+        if True:
+            # 由于有「11.5期」这样的实例，要考虑一天发多期的情况
+            daily_dovess = self.db.get_responses_match(
+                self.date, 36939614, r'^Daily Dove 每日鸽报.*?<br />\r?$')
+            daily_dove_dict = OrderedDict()
+            for daily_dove in daily_dovess:
+                lines = daily_dove[1].splitlines()
+                if len(lines) < 2:
+                    continue
+                line2 = lines[1]
+                m = re.search(r'第(\S*?)期\s*?<br />', line2)
+                if m is None:
+                    issue = None
+                else:
+                    issue = m.group(1)
+                daily_dove_dict[issue] = daily_dove
+            for issue, daily_dove in daily_dove_dict.items():
+                if issue is None:
+                    issue_text = ''
+                else:
+                    issue_text = f"〔第{issue}期〕"
+                stuff.append(
+                    f"每日鸽报{issue_text}：>>No.{daily_dove[0]} (位于原串第{(daily_dove[2]-1)//19+1}页)")
+
+        # 有趣团推荐报
+        if True:
+            third_newspapers = self.db.get_responses_match(
+                self.date, 37777146, r'^『.*?报.*?』.*?<br />\r?$')
+            third_newspaper_name = None
+            if len(third_newspapers) > 0:
+                # 假设每日最多一期
+                third_newspaper = third_newspapers[-1]
+                line1 = third_newspaper[1].splitlines()[0]
+                m = re.search(r'『(.*?报)(.*?)』：?(.*?)<br />', line1)
+                if m is not None:  # always true
+                    third_newspaper_name = m.group(1)
+                    issue_text = ''
+                    subhead = m.group(2)
+                    if len(subhead) <= 5:
+                        issue_text = subhead
+                    else:
+                        issue_text = subhead[:5] + "…"
+                    issue_date = m.group(3)
+                    if len(issue_date) > 0:
+                        if issue_text != "":
+                            issue_text += " "
+                        if len(issue) <= 5:
+                            issue_text += issue_date
+                        else:
+                            issue_text += issue_date[:5] + "…"
+                    if issue_text != "":
+                        issue_text = f"〔{issue_text}〕"
+                    stuff.append(
+                        f"{third_newspaper_name}{issue_text}：>>No.{third_newspaper[0]} (位于原串第{(third_newspaper[2]-1)//19+1}页)")
 
         if len(stuff) == 0:
             return None
